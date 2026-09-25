@@ -1,0 +1,60 @@
+# Uptime Kuma — hardened self-hosted uptime monitoring
+# Docs: https://github.com/louislam/uptime-kuma/wiki
+# - Non-root (node, UID 1000, same as the upstream "rootless" target), no capabilities
+# - Unprivileged ICMP via ping_group_range instead of NET_RAW
+# - No published ports: UI and status pages via Traefik
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  uptimekuma:
+    <<: *hardening
+    image: docker.io/louislam/uptime-kuma:2.5.5
+    container_name: ${CONTAINER_NAME:-uptimekuma}
+    # /app/data is owned by node:node in the image, so a fresh named volume is writable.
+    user: "1000:1000"
+    # Root FS stays writable: not verified upstream for read-only (embedded MariaDB, browser
+    # engine and npm cache paths). See README.
+    tmpfs: [/tmp]
+    # Allow unprivileged ICMP echo sockets so ping monitors work without NET_RAW.
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
+    environment:
+      TZ: ${TZ:-UTC}
+      UPTIME_KUMA_PORT: "3001"
+    volumes:
+      - uptimekuma-data:/app/data
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.uptimekuma.rule: Host(`${UPTIMEKUMA_HOST}`)
+      traefik.http.routers.uptimekuma.entrypoints: websecure
+      traefik.http.services.uptimekuma.loadbalancer.server.port: "3001"
+    # proxy is a non-internal network, which monitors need for outbound checks.
+    networks: [proxy]
+    healthcheck:
+      # Static Go probe shipped in the image (same as the upstream HEALTHCHECK).
+      test: ["CMD", "/app/extra/healthcheck"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+      start_period: 180s
+    pids_limit: 500
+    deploy:
+      resources:
+        limits: { cpus: "${UPTIMEKUMA_CPUS:-1.0}", memory: "${UPTIMEKUMA_MEMORY:-1G}" }
+
+volumes:
+  uptimekuma-data:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

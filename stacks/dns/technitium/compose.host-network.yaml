@@ -1,0 +1,84 @@
+# Optional ALTERNATIVE to compose.yaml (STANDALONE file): Technitium on the host network (DHCP, real client IPs).
+# Use this file ON ITS OWN, not as an overlay:
+#   docker compose -f compose.host-network.yaml up -d
+# (Compose cannot remove the `networks:`/`ports:`/`sysctls:` of compose.yaml from an overlay
+# without the `!reset` tag, and network sysctls are rejected in the host namespace, so this is a
+# standalone file. It reuses the same volumes and secret.)
+# No Traefik route: the web console listens on TECHNITIUM_HOST_WEB_ADDRESSES (loopback by default).
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  technitium:
+    <<: *hardening
+    image: docker.io/technitium/dns-server:15.5.0
+    container_name: ${CONTAINER_NAME:-technitium}
+    # Root is required to bind 53/67 in the host namespace; all other capabilities stay dropped.
+    user: "0:0"
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      init-perms: { condition: service_completed_successfully }
+    # HARDENING-EXCEPTION: host network — DHCP needs broadcast on the LAN and DNS must see real client IPs.
+    network_mode: host
+    cap_add:
+      - NET_BIND_SERVICE  # DNS 53, DHCP 67 (and 80/443/853 if enabled) in the host namespace
+      - NET_RAW           # DHCP server
+    environment:
+      TZ: ${TZ:-UTC}
+      HOME: /tmp
+      DNS_SERVER_DOMAIN: ${TECHNITIUM_DOMAIN:-dns-server}
+      DNS_SERVER_ADMIN_PASSWORD_FILE: /run/secrets/technitium_admin_password
+      DNS_SERVER_LOG_FOLDER_PATH: /var/log/technitium/dns
+      DNS_SERVER_LOG_USING_LOCAL_TIME: ${TECHNITIUM_LOG_LOCAL_TIME:-true}
+      DNS_SERVER_RECURSION: ${TECHNITIUM_RECURSION:-AllowOnlyForPrivateNetworks}
+      DNS_SERVER_FORWARDERS: ${TECHNITIUM_FORWARDERS:-1.1.1.1,9.9.9.9}
+      DNS_SERVER_FORWARDER_PROTOCOL: ${TECHNITIUM_FORWARDER_PROTOCOL:-Udp}
+      DNS_SERVER_ENABLE_BLOCKING: ${TECHNITIUM_ENABLE_BLOCKING:-false}
+      # Keep the web console off the LAN (upstream: only valid with host networking).
+      DNS_SERVER_WEB_SERVICE_LOCAL_ADDRESSES: ${TECHNITIUM_HOST_WEB_ADDRESSES:-127.0.0.1}
+    secrets: [technitium_admin_password]
+    volumes:
+      - technitium-config:/etc/dns
+      - technitium-logs:/var/log/technitium/dns
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:5380/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${TECHNITIUM_CPUS:-1.0}", memory: "${TECHNITIUM_MEMORY:-1G}" }
+
+  init-perms:
+    <<: *hardening
+    image: docker.io/technitium/dns-server:15.5.0
+    restart: "no"
+    entrypoint: ["sh", "-c", "chown -R 0:0 /etc/dns /var/log/technitium/dns && chmod 700 /etc/dns"]
+    cap_add: [CHOWN, FOWNER]  # needed only to chown the data volumes
+    network_mode: none
+    volumes:
+      - technitium-config:/etc/dns
+      - technitium-logs:/var/log/technitium/dns
+    pids_limit: 20
+    deploy:
+      resources:
+        limits: { cpus: "0.1", memory: 32M }
+
+secrets:
+  technitium_admin_password:
+    file: ./secrets/technitium_admin_password
+
+volumes:
+  technitium-config:
+  technitium-logs:

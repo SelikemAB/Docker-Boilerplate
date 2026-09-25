@@ -1,0 +1,130 @@
+# Forgejo — hardened self-hosted software forge (Git hosting, code review, issues, packages)
+# Docs: https://forgejo.org/docs/latest/admin/installation/docker/
+# - Rootless image (UID 1000), no capabilities, read-only root FS
+# - PostgreSQL backend on an internal network; secrets via GITEA-style __FILE variables
+# - Web UI through Traefik; built-in SSH server on an unprivileged port
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  forgejo:
+    <<: *hardening
+    image: codeberg.org/forgejo/forgejo:16.0.5-rootless
+    container_name: ${CONTAINER_NAME:-forgejo}
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      TZ: ${TZ:-UTC}
+      # environment-to-ini writes these into app.ini on every start.
+      FORGEJO__database__DB_TYPE: postgres
+      FORGEJO__database__HOST: postgres:5432
+      FORGEJO__database__NAME: ${FORGEJO_DB_NAME:-forgejo}
+      FORGEJO__database__USER: ${FORGEJO_DB_USER:-forgejo}
+      FORGEJO__database__PASSWD__FILE: /run/secrets/forgejo_db_password
+      FORGEJO__database__SSL_MODE: disable
+      FORGEJO__server__DOMAIN: ${FORGEJO_HOST}
+      FORGEJO__server__SSH_DOMAIN: ${FORGEJO_HOST}
+      FORGEJO__server__ROOT_URL: https://${FORGEJO_HOST}/
+      FORGEJO__server__HTTP_PORT: "3000"
+      FORGEJO__server__START_SSH_SERVER: "true"
+      FORGEJO__server__SSH_LISTEN_PORT: "2222"
+      # Port shown in clone URLs (the published host port).
+      FORGEJO__server__SSH_PORT: ${FORGEJO_SSH_PORT:-2222}
+      FORGEJO__server__LANDING_PAGE: ${FORGEJO_LANDING_PAGE:-login}
+      # Skip the web installer: config comes from env, the admin is created via CLI.
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__security__SECRET_KEY__FILE: /run/secrets/forgejo_secret_key
+      FORGEJO__security__INTERNAL_TOKEN__FILE: /run/secrets/forgejo_internal_token
+      FORGEJO__security__PASSWORD_HASH_ALGO: argon2
+      FORGEJO__service__DISABLE_REGISTRATION: ${FORGEJO_DISABLE_REGISTRATION:-true}
+      FORGEJO__service__REQUIRE_SIGNIN_VIEW: ${FORGEJO_REQUIRE_SIGNIN_VIEW:-false}
+      FORGEJO__session__COOKIE_SECURE: "true"
+      FORGEJO__log__LEVEL: ${FORGEJO_LOG_LEVEL:-Info}
+    secrets: [forgejo_db_password, forgejo_secret_key, forgejo_internal_token]
+    ports:
+      # HARDENING-EXCEPTION: port — Git over SSH must be reachable by clients, so it binds all interfaces by default.
+      - "${SSH_BIND_ADDRESS:-0.0.0.0}:${FORGEJO_SSH_PORT:-2222}:2222"
+    volumes:
+      # Repositories, LFS, attachments, packages and custom/conf/app.ini
+      - forgejo-data:/var/lib/gitea
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      traefik.http.routers.forgejo.rule: Host(`${FORGEJO_HOST}`)
+      traefik.http.routers.forgejo.entrypoints: websecure
+      traefik.http.services.forgejo.loadbalancer.server.port: "3000"
+    networks: [proxy, backend]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    pids_limit: 500
+    deploy:
+      resources:
+        limits: { cpus: "${FORGEJO_CPUS:-2.0}", memory: "${FORGEJO_MEMORY:-2G}" }
+
+  postgres:
+    <<: *hardening
+    image: docker.io/library/postgres:18.6-alpine
+    container_name: ${CONTAINER_NAME:-forgejo}-postgres
+    user: "70:70"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    shm_size: 128m
+    environment:
+      TZ: ${TZ:-UTC}
+      POSTGRES_USER: ${FORGEJO_DB_USER:-forgejo}
+      POSTGRES_DB: ${FORGEJO_DB_NAME:-forgejo}
+      POSTGRES_PASSWORD_FILE: /run/secrets/forgejo_db_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256 --data-checksums"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    secrets: [forgejo_db_password]
+    volumes:
+      - forgejo-postgres:/var/lib/postgresql
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    pids_limit: 200
+    deploy:
+      resources:
+        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-1G}" }
+
+secrets:
+  forgejo_db_password:
+    file: ./secrets/forgejo_db_password
+  forgejo_secret_key:
+    file: ./secrets/forgejo_secret_key
+  forgejo_internal_token:
+    file: ./secrets/forgejo_internal_token
+
+volumes:
+  forgejo-data:
+  forgejo-postgres:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  backend:
+    internal: true

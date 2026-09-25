@@ -1,0 +1,8 @@
+# Container log acquisition through the read-only socket proxy (needs compose.docker-logs.yaml).
+# Copy to config/acquis.d/ to enable.
+source: docker
+docker_host: tcp://crowdsec-socket-proxy:2375
+container_name_regexp:
+  - ^traefik$
+labels:
+  type: traefik

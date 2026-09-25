@@ -1,0 +1,57 @@
+# Open WebUI — bundled Ollama backend (opt-in override)
+#   docker compose -f compose.yaml -f compose.ollama.yaml up -d
+# Runs Ollama next to Open WebUI (OLLAMA_BASE_URL=http://ollama:11434, the default).
+# Ollama's API is not published and not on the proxy network.
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  openwebui:
+    depends_on:
+      ollama: { condition: service_healthy }
+    networks: [llm]
+
+  ollama:
+    <<: *hardening
+    image: docker.io/ollama/ollama:0.34.4
+    container_name: ${CONTAINER_NAME:-openwebui}-ollama
+    # Runs as root (models in /root/.ollama); no capabilities are added back.
+    environment:
+      TZ: ${TZ:-UTC}
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
+    volumes:
+      - ollama-models:/root/.ollama
+    # llm is a stack-local bridge (not internal) because Ollama pulls models from the internet.
+    networks: [llm]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    pids_limit: 512
+    deploy:
+      resources:
+        limits: { cpus: "${OLLAMA_CPUS:-4.0}", memory: "${OLLAMA_MEMORY:-16G}" }
+        # NVIDIA GPU (requires nvidia-container-toolkit on the host):
+        # reservations:
+        #   devices:
+        #     - driver: nvidia
+        #       count: all
+        #       capabilities: [gpu]
+
+volumes:
+  ollama-models:
+
+networks:
+  llm:

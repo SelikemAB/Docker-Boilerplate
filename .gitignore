@@ -1,0 +1,21 @@
+# Local configuration and secrets — never commit
+.env
+*.env.local
+**/secrets/*
+!**/secrets/.gitkeep
+*.pem
+*.key
+!stacks/**/config/**/*.key.example
+acme.json
+
+# Runtime data
+**/data/
+**/backups/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+__pycache__/

@@ -1,0 +1,30 @@
+# GitLab Runner configuration template.
+# config/render-config.sh fills the @@...@@ placeholders from the environment and the
+# runner token secret at container start and writes /etc/gitlab-runner/config.toml.
+concurrent = @@RUNNER_CONCURRENT@@
+log_level = "warning"
+log_format = "json"
+check_interval = 5
+# Prometheus metrics (and the healthcheck). Not published outside the container.
+listen_address = ":9252"
+
+[[runners]]
+  name = "@@RUNNER_NAME@@"
+  url = "@@GITLAB_URL@@"
+  executor = "docker"
+  # Runner authentication token (glrt-...), injected from ./secrets/gitlab_runner_token
+  token = "@@RUNNER_TOKEN@@"
+  limit = 0
+  # To authenticate Docker Hub pulls, set DOCKER_AUTH_CONFIG as a masked CI/CD variable in
+  # GitLab instead of storing credentials here.
+  [runners.docker]
+    tls_verify = false
+    image = "@@RUNNER_EXECUTOR_IMAGE@@"
+    # true is required for docker:dind builds but gives jobs full root on the host.
+    privileged = @@RUNNER_PRIVILEGED@@
+    disable_cache = false
+    # Job containers get no Docker socket by default. Append "/var/run/docker.sock:/var/run/docker.sock"
+    # only on a dedicated runner host (every job then has root on it).
+    volumes = ["/cache"]
+  [runners.cache]
+    Insecure = false

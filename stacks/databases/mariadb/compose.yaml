@@ -1,0 +1,73 @@
+# MariaDB — hardened standalone database
+# Docs: https://hub.docker.com/_/mariadb
+# - Non-root (mysql UID 999), no capabilities, read-only root FS
+# - Passwords via Docker secrets (MARIADB_*_PASSWORD_FILE), root limited to localhost
+# - Port bound to loopback by default
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  mariadb:
+    <<: *hardening
+    image: docker.io/library/mariadb:11.8.9
+    container_name: ${CONTAINER_NAME:-mariadb}
+    user: "999:999"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run/mysqld
+    environment:
+      TZ: ${TZ:-UTC}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-app}
+      MARIADB_USER: ${MARIADB_USER:-app}
+      MARIADB_PASSWORD_FILE: /run/secrets/mariadb_password
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/mariadb_root_password
+      # root may only log in from inside the container; applications use MARIADB_USER.
+      MARIADB_ROOT_HOST: localhost
+      # Run mariadb-upgrade automatically after minor/patch image updates.
+      MARIADB_AUTO_UPGRADE: "1"
+    secrets: [mariadb_password, mariadb_root_password]
+    command:
+      - --skip-name-resolve
+      - --local-infile=0
+      - --log-warnings=2
+      - --max-connections=${MARIADB_MAX_CONNECTIONS:-200}
+      - --innodb-buffer-pool-size=${MARIADB_INNODB_BUFFER_POOL_SIZE:-512M}
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${MARIADB_PORT:-3306}:3306"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    networks: [database]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${MARIADB_CPUS:-2.0}", memory: "${MARIADB_MEMORY:-2G}" }
+
+secrets:
+  mariadb_password:
+    file: ./secrets/mariadb_password
+  mariadb_root_password:
+    file: ./secrets/mariadb_root_password
+
+volumes:
+  mariadb-data:
+
+networks:
+  # Other stacks can join this network to reach the DB without publishing ports.
+  database:
+    name: ${DATABASE_NETWORK:-database}

@@ -1,0 +1,9 @@
+# Optional: publish Teleport's listeners directly instead of (or besides) Traefik.
+# Useful for agents joining via the auth port, or for TLS routing without an L7 proxy.
+# Usage: docker compose -f compose.yaml -f compose.expose-ports.yaml up -d
+# Loopback by default; set BIND_ADDRESS to an interface IP to expose them.
+services:
+  teleport:
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${TELEPORT_WEB_PORT:-3080}:3080"          # web / multiplexed proxy
+      - "${BIND_ADDRESS:-127.0.0.1}:${TELEPORT_AUTH_PORT:-3025}:3025"         # auth service

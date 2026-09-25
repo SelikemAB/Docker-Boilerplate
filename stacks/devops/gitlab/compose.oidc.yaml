@@ -1,0 +1,17 @@
+# Optional: OpenID Connect single sign-on (e.g. Authentik). Client secret in
+# ./secrets/gitlab_oidc_client_secret.
+# Usage: docker compose -f compose.yaml -f compose.oidc.yaml up -d
+services:
+  gitlab:
+    environment:
+      GITLAB_OIDC_ENABLED: "true"
+      GITLAB_OIDC_LABEL: ${GITLAB_OIDC_LABEL:-Authentik}
+      GITLAB_OIDC_ISSUER: ${GITLAB_OIDC_ISSUER}
+      GITLAB_OIDC_CLIENT_ID: ${GITLAB_OIDC_CLIENT_ID}
+      GITLAB_OIDC_UID_FIELD: ${GITLAB_OIDC_UID_FIELD:-sub}
+      GITLAB_OIDC_BLOCK_AUTO_CREATED_USERS: ${GITLAB_OIDC_BLOCK_AUTO_CREATED_USERS:-true}
+    secrets: [gitlab_oidc_client_secret]
+
+secrets:
+  gitlab_oidc_client_secret:
+    file: ./secrets/gitlab_oidc_client_secret

@@ -1,0 +1,90 @@
+# Home Assistant — local-first home automation
+# Docs: https://www.home-assistant.io/installation/linux#docker-compose
+# - Bridge networking behind Traefik by default; host networking, USB devices and privileged
+#   mode are opt-in override files (see README)
+# - All capabilities dropped except the few the s6-overlay init needs
+# - First-run config seeded with reverse-proxy trust (http.trusted_proxies)
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  homeassistant:
+    <<: *hardening
+    image: ghcr.io/home-assistant/home-assistant:2026.9.3
+    container_name: ${CONTAINER_NAME:-homeassistant}
+    # The image runs s6-overlay as root (no user: possible). Only what init and the
+    # supervised services need is added back.
+    cap_add:
+      - CHOWN         # s6-overlay prepares /run and service dirs
+      - DAC_OVERRIDE  # s6-overlay and integrations writing root-owned paths
+      - FOWNER        # chmod on files in /config and /run
+      - SETUID        # s6 service supervision / privilege switching
+      - SETGID        # s6 service supervision / privilege switching
+    depends_on:
+      init-config: { condition: service_completed_successfully }
+    environment:
+      TZ: ${TZ:-UTC}
+      # Read by the seeded configuration.yaml (!env_var) as the trusted reverse-proxy range.
+      HA_TRUSTED_PROXIES: ${HA_TRUSTED_PROXIES:-172.16.0.0/12}
+    volumes:
+      - homeassistant-config:/config
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.homeassistant.rule: Host(`${HA_HOST}`)
+      traefik.http.routers.homeassistant.entrypoints: websecure
+      traefik.http.services.homeassistant.loadbalancer.server.port: "8123"
+    networks: [proxy]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8123/manifest.json"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
+    stop_grace_period: 4m  # matches S6_SERVICES_GRACETIME so the recorder can flush
+    pids_limit: 1024
+    deploy:
+      resources:
+        limits: { cpus: "${HA_CPUS:-2.0}", memory: "${HA_MEMORY:-2G}" }
+
+  # One-shot helper: seeds configuration.yaml on first start (never overwrites an existing one).
+  init-config:
+    image: ghcr.io/home-assistant/home-assistant:2026.9.3
+    restart: "no"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        if [ ! -f /config/configuration.yaml ]; then
+        cp /seed/configuration.yaml /config/configuration.yaml &&
+        echo '[]' > /config/automations.yaml &&
+        touch /config/scripts.yaml /config/scenes.yaml &&
+        mkdir -p /config/themes &&
+        echo 'Seeded configuration.yaml';
+        else echo 'configuration.yaml exists, leaving it untouched'; fi
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]  # runs as root on a root-owned volume; no capabilities needed
+    network_mode: none
+    volumes:
+      - homeassistant-config:/config
+      - ./config/configuration.yaml:/seed/configuration.yaml:ro
+    logging: *logging
+    pids_limit: 20
+    deploy:
+      resources:
+        limits: { cpus: "0.1", memory: 32M }
+
+volumes:
+  homeassistant-config:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

@@ -1,0 +1,12 @@
+# Optional: enable the GitLab Container Registry, served by Traefik on its own hostname.
+# Usage: docker compose -f compose.yaml -f compose.registry.yaml up -d
+services:
+  gitlab:
+    environment:
+      GITLAB_REGISTRY_ENABLED: "true"
+      GITLAB_REGISTRY_HOST: ${GITLAB_REGISTRY_HOST}
+    labels:
+      traefik.http.routers.gitlab-registry.rule: Host(`${GITLAB_REGISTRY_HOST}`)
+      traefik.http.routers.gitlab-registry.entrypoints: websecure
+      traefik.http.routers.gitlab-registry.service: gitlab-registry
+      traefik.http.services.gitlab-registry.loadbalancer.server.port: "5000"

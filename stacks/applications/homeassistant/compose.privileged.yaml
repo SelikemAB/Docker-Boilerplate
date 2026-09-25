@@ -1,0 +1,9 @@
+# Home Assistant — privileged mode (opt-in override, LAST RESORT)
+#   docker compose -f compose.host-network.yaml -f compose.privileged.yaml up -d
+# Only use this if compose.devices.yaml can't cover your hardware (e.g. GPIO/I2C on a
+# Raspberry Pi or hot-plugging arbitrary USB devices). It gives the container full access to
+# all host devices and effectively voids the capability restrictions.
+services:
+  homeassistant:
+    # HARDENING-EXCEPTION: privileged — unrestricted host hardware access for devices that can't be mapped individually.
+    privileged: true

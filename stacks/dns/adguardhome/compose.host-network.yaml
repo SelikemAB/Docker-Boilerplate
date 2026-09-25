@@ -1,0 +1,85 @@
+# Optional ALTERNATIVE to compose.yaml (STANDALONE file): AdGuard Home on the host network (needed for its DHCP server).
+# Use this file ON ITS OWN, not as an overlay:
+#   docker compose -f compose.host-network.yaml up -d
+# (Compose cannot remove the `networks:`/`ports:` of compose.yaml from an overlay without the
+# `!reset` tag, so this is a standalone file. It reuses the same volumes, secret and seed.)
+#
+# - The seed makes AdGuard listen on port 53 and serve the web UI on ADGUARD_HOST_HTTP_ADDRESS
+#   (loopback by default; the healthcheck expects the UI on 127.0.0.1:3000). The seed only
+#   applies on FIRST start; on an existing install edit `dns.port` and `http.address` in
+#   AdGuardHome.yaml instead.
+# - No Traefik route: the UI is reached via an SSH tunnel or a management IP.
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  adguardhome:
+    <<: *hardening
+    image: docker.io/adguard/adguardhome:v0.107.79
+    container_name: ${CONTAINER_NAME:-adguardhome}
+    # Runs as root so it can bind 53/67 in the host namespace (file capabilities are ignored
+    # under no-new-privileges). All capabilities except the ones below are still dropped.
+    user: "0:0"
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      init-config: { condition: service_completed_successfully }
+    # HARDENING-EXCEPTION: host network — DHCP needs broadcast on the LAN and DNS must see real client IPs.
+    network_mode: host
+    cap_add:
+      - NET_BIND_SERVICE  # DNS on 53, DHCP on 67 in the host network namespace
+      - NET_RAW           # DHCP server (raw sockets)
+      - NET_ADMIN         # DHCP server (interface configuration checks)
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - adguardhome-work:/opt/adguardhome/work
+      - adguardhome-conf:/opt/adguardhome/conf
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/login.html || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    pids_limit: 200
+    deploy:
+      resources:
+        limits: { cpus: "${ADGUARD_CPUS:-1.0}", memory: "${ADGUARD_MEMORY:-512M}" }
+
+  init-config:
+    <<: *hardening
+    image: docker.io/adguard/adguardhome:v0.107.79
+    restart: "no"
+    entrypoint: ["/bin/sh", "/seed/init-config.sh"]
+    environment:
+      ADGUARD_UID: "0"
+      ADGUARD_GID: "0"
+      ADGUARD_DNS_PORT: "53"
+      ADGUARD_HTTP_ADDRESS: ${ADGUARD_HOST_HTTP_ADDRESS:-127.0.0.1:3000}
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]  # hand the volumes to the runtime user, write the seed
+    network_mode: none
+    secrets: [adguard_admin]
+    volumes:
+      - adguardhome-work:/opt/adguardhome/work
+      - adguardhome-conf:/opt/adguardhome/conf
+      - ./config:/seed:ro
+    pids_limit: 20
+    deploy:
+      resources:
+        limits: { cpus: "0.1", memory: 32M }
+
+secrets:
+  adguard_admin:
+    file: ./secrets/adguard_admin
+
+volumes:
+  adguardhome-work:
+  adguardhome-conf:

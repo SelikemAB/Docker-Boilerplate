@@ -1,0 +1,7 @@
+# Optional: publish the Portainer UI directly (without Traefik), loopback-only by default.
+# Usage: docker compose -f compose.yaml -f compose.expose-ports.yaml up -d
+# 9443 is Portainer's own HTTPS listener (self-signed certificate unless you supply one).
+services:
+  portainer:
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORTAINER_HTTPS_PORT:-9443}:9443"

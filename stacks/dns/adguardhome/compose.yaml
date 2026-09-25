@@ -1,0 +1,96 @@
+# AdGuard Home — hardened network-wide DNS filter
+# Docs: https://github.com/AdguardTeam/AdGuardHome/wiki/Docker
+# - Runs as non-root (nobody) on unprivileged container ports (DNS 5053, web 3000), no
+#   capabilities, read-only root FS
+# - Config seeded on first start with a bcrypt admin user from a Docker secret (no open setup wizard)
+# - Web UI and DNS-over-HTTPS served through Traefik; host port 53 maps to container port 5053
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  adguardhome:
+    <<: *hardening
+    image: docker.io/adguard/adguardhome:v0.107.79
+    container_name: ${CONTAINER_NAME:-adguardhome}
+    user: "${ADGUARD_UID:-65534}:${ADGUARD_GID:-65534}"
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      init-config: { condition: service_completed_successfully }
+    environment:
+      TZ: ${TZ:-UTC}
+    ports:
+      # HARDENING-EXCEPTION: port — a network DNS resolver must answer on all interfaces by default.
+      - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DNS_PORT:-53}:5053/tcp"
+      - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DNS_PORT:-53}:5053/udp"
+    volumes:
+      - adguardhome-work:/opt/adguardhome/work
+      - adguardhome-conf:/opt/adguardhome/conf
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.adguardhome.rule: Host(`${ADGUARD_HOST}`)
+      traefik.http.routers.adguardhome.entrypoints: websecure
+      # Admin UI and /dns-query (DoH) are restricted to private networks.
+      traefik.http.routers.adguardhome.middlewares: internal-only@file
+      traefik.http.services.adguardhome.loadbalancer.server.port: "3000"
+    networks:
+      proxy: {}
+      dns: {}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/login.html || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    pids_limit: 200
+    deploy:
+      resources:
+        limits: { cpus: "${ADGUARD_CPUS:-1.0}", memory: "${ADGUARD_MEMORY:-512M}" }
+
+  # One-shot helper: seeds AdGuardHome.yaml on first start and hands the volumes to the non-root user.
+  init-config:
+    <<: *hardening
+    image: docker.io/adguard/adguardhome:v0.107.79
+    restart: "no"
+    entrypoint: ["/bin/sh", "/seed/init-config.sh"]
+    environment:
+      ADGUARD_UID: ${ADGUARD_UID:-65534}
+      ADGUARD_GID: ${ADGUARD_GID:-65534}
+      ADGUARD_DNS_PORT: "5053"
+      ADGUARD_HTTP_ADDRESS: "0.0.0.0:3000"
+    # CHOWN/FOWNER: hand the volumes to the runtime user.
+    # DAC_OVERRIDE: write the seed file into a conf dir that is already owned by that user.
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    network_mode: none
+    secrets: [adguard_admin]
+    volumes:
+      - adguardhome-work:/opt/adguardhome/work
+      - adguardhome-conf:/opt/adguardhome/conf
+      - ./config:/seed:ro
+    pids_limit: 20
+    deploy:
+      resources:
+        limits: { cpus: "0.1", memory: 32M }
+
+secrets:
+  adguard_admin:
+    file: ./secrets/adguard_admin
+
+volumes:
+  adguardhome-work:
+  adguardhome-conf:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  # Stack-local bridge with egress: upstream resolvers and filter-list downloads.
+  dns:

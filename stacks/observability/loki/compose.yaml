@@ -1,0 +1,68 @@
+# Loki — hardened log aggregation (single-binary, filesystem storage)
+# Docs: https://grafana.com/docs/loki/latest/
+# - Non-root (UID 10001, distroless image), no capabilities, read-only root FS
+# - Retention enforced by the compactor (LOKI_RETENTION_PERIOD)
+# - No published ports: push/query on the internal monitoring network, UI/API via Traefik
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  loki:
+    <<: *hardening
+    image: docker.io/grafana/loki:3.7.8
+    container_name: ${CONTAINER_NAME:-loki}
+    user: "10001:10001"
+    read_only: true
+    tmpfs: [/tmp]
+    command:
+      - -config.file=/etc/loki/config.yaml
+      # Expands ${VAR:-default} in config.yaml from the container environment.
+      - -config.expand-env=true
+    environment:
+      TZ: ${TZ:-UTC}
+      LOKI_RETENTION_PERIOD: ${LOKI_RETENTION_PERIOD:-168h}
+      LOKI_INGESTION_RATE_MB: ${LOKI_INGESTION_RATE_MB:-4}
+      LOKI_INGESTION_BURST_MB: ${LOKI_INGESTION_BURST_MB:-6}
+    volumes:
+      - loki-data:/loki
+      - ./config/config.yaml:/etc/loki/config.yaml:ro
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.loki.rule: Host(`${LOKI_HOST}`)
+      traefik.http.routers.loki.entrypoints: websecure
+      # Loki has auth_enabled: false, so the API is restricted to private ranges.
+      traefik.http.routers.loki.middlewares: internal-only@file
+      traefik.http.services.loki.loadbalancer.server.port: "3100"
+    networks: [proxy, monitoring]
+    healthcheck:
+      # Built-in probe (Loki >= 3.7); the distroless image has no shell, curl or wget.
+      test: ["CMD", "/usr/bin/loki", "-health", "-health.url=http://127.0.0.1:3100/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    stop_grace_period: 30s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${LOKI_CPUS:-1.0}", memory: "${LOKI_MEMORY:-1G}" }
+
+volumes:
+  loki-data:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  # Shared observability network (Alloy pushes here, Grafana queries here).
+  monitoring:
+    name: ${MONITORING_NETWORK:-monitoring}
+    external: true

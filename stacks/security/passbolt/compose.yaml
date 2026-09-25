@@ -1,0 +1,115 @@
+# Passbolt CE — hardened team password manager
+# Docs: https://www.passbolt.com/docs/hosting/install/ce/docker/
+# - Non-root image variant (www-data, UID 33) listening on 8080, no capabilities
+# - DB and SMTP credentials via Docker secrets (*_FILE, supported by the entrypoint)
+# - MariaDB LTS, non-root, read-only root FS, on an internal network
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  passbolt:
+    <<: *hardening
+    image: docker.io/passbolt/passbolt:5.16.0-1-ce-non-root
+    container_name: passbolt
+    user: "33:33"
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      TZ: ${TZ:-UTC}
+      APP_DEFAULT_TIMEZONE: ${TZ:-UTC}
+      APP_FULL_BASE_URL: https://${PASSBOLT_HOST}
+      # TLS terminates at Traefik; trust its X-Forwarded-* headers.
+      PASSBOLT_SECURITY_PROXIES_ACTIVE: "true"
+      PASSBOLT_SECURITY_PROXIES_TRUSTED_PROXIES: ${PASSBOLT_TRUSTED_PROXIES:-}
+      DATASOURCES_DEFAULT_HOST: db
+      DATASOURCES_DEFAULT_PORT: "3306"
+      DATASOURCES_DEFAULT_USERNAME: ${DB_USER:-passbolt}
+      DATASOURCES_DEFAULT_PASSWORD_FILE: /run/secrets/db_password
+      DATASOURCES_DEFAULT_DATABASE: ${DB_NAME:-passbolt}
+      EMAIL_TRANSPORT_DEFAULT_HOST: ${SMTP_HOST:-smtp.example.com}
+      EMAIL_TRANSPORT_DEFAULT_PORT: ${SMTP_PORT:-587}
+      EMAIL_TRANSPORT_DEFAULT_USERNAME: ${SMTP_USERNAME:-}
+      EMAIL_TRANSPORT_DEFAULT_PASSWORD_FILE: /run/secrets/smtp_password
+      EMAIL_TRANSPORT_DEFAULT_TLS: ${SMTP_TLS:-true}
+      EMAIL_DEFAULT_FROM: ${SMTP_FROM:-passbolt@example.com}
+      EMAIL_DEFAULT_FROM_NAME: ${SMTP_FROM_NAME:-Passbolt}
+    secrets: [db_password, smtp_password]
+    volumes:
+      - passbolt-gpg:/etc/passbolt/gpg
+      - passbolt-jwt:/etc/passbolt/jwt
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      traefik.http.routers.passbolt.rule: Host(`${PASSBOLT_HOST}`)
+      traefik.http.routers.passbolt.entrypoints: websecure
+      traefik.http.services.passbolt.loadbalancer.server.port: "8080"
+    # proxy: Traefik ingress + SMTP egress. backend: database.
+    networks: [proxy, backend]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:8080/healthcheck/status.json || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${PASSBOLT_CPUS:-2.0}", memory: "${PASSBOLT_MEMORY:-1G}" }
+
+  db:
+    <<: *hardening
+    image: docker.io/library/mariadb:11.8.9
+    container_name: passbolt-db
+    user: "999:999"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run/mysqld
+    environment:
+      TZ: ${TZ:-UTC}
+      MARIADB_RANDOM_ROOT_PASSWORD: "true"
+      MARIADB_DATABASE: ${DB_NAME:-passbolt}
+      MARIADB_USER: ${DB_USER:-passbolt}
+      MARIADB_PASSWORD_FILE: /run/secrets/db_password
+      MARIADB_AUTO_UPGRADE: "true"
+    secrets: [db_password]
+    volumes:
+      - passbolt-db:/var/lib/mysql
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${DB_CPUS:-1.0}", memory: "${DB_MEMORY:-1G}" }
+
+secrets:
+  db_password:
+    file: ./secrets/db_password
+  smtp_password:
+    file: ./secrets/smtp_password
+
+volumes:
+  passbolt-db:
+  passbolt-gpg:
+  passbolt-jwt:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  backend:
+    internal: true

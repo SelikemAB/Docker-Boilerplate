@@ -1,0 +1,12 @@
+# Optional: unattended first start. Creates the `akadmin` user with this password.
+# Usage (first start only):
+#   docker compose -f compose.yaml -f compose.bootstrap.yaml up -d
+# Afterwards run `docker compose up -d` without this file and remove the value from .env.
+# authentik's bootstrap blueprint reads these raw from the environment (no file:// support),
+# so the password lives in .env for the duration of the bootstrap only.
+
+services:
+  worker:
+    environment:
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD:?set AUTHENTIK_BOOTSTRAP_PASSWORD in .env}
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-admin@example.com}

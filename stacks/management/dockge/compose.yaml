@@ -1,0 +1,61 @@
+# Dockge — hardened Docker Compose stack manager
+# Docs: https://github.com/louislam/dockge
+# - Published only through Traefik, restricted to internal networks
+# - All capabilities dropped, resource and PID limits, rotated logs
+# WARNING: Dockge drives the Docker CLI against the host socket. Access to Dockge is
+# equivalent to root on the host. See README.
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  dockge:
+    <<: *hardening
+    image: docker.io/louislam/dockge:1.5.0
+    container_name: ${CONTAINER_NAME:-dockge}
+    # Runs as root (upstream image has no non-root mode): it owns the stacks directory and
+    # talks to the root-owned socket. No capabilities are added back.
+    environment:
+      TZ: ${TZ:-UTC}
+      DOCKGE_STACKS_DIR: ${DOCKGE_STACKS_DIR:-/opt/stacks}
+    volumes:
+      # HARDENING-EXCEPTION: docker socket — Dockge runs `docker compose` for arbitrary stacks and needs full Docker API access; it has no socket-proxy/TCP mode. (A `:ro` flag would not restrict the API, so it is omitted to avoid a false sense of security.)
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - dockge-data:/app/data
+      # Stacks must live at the SAME absolute path inside and outside the container,
+      # otherwise relative bind mounts in the stacks resolve to the wrong host path.
+      - ${DOCKGE_STACKS_DIR:-/opt/stacks}:${DOCKGE_STACKS_DIR:-/opt/stacks}
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      traefik.http.routers.dockge.rule: Host(`${DOCKGE_HOST}`)
+      traefik.http.routers.dockge.entrypoints: websecure
+      traefik.http.routers.dockge.middlewares: internal-only@file
+      traefik.http.services.dockge.loadbalancer.server.port: "5001"
+    networks: [proxy]
+    healthcheck:
+      # Upstream's bundled Go probe (same as the image HEALTHCHECK).
+      test: ["CMD", "/app/extra/healthcheck"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+      start_period: 60s
+    pids_limit: 500
+    deploy:
+      resources:
+        limits: { cpus: "${DOCKGE_CPUS:-1.0}", memory: "${DOCKGE_MEMORY:-1G}" }
+
+volumes:
+  dockge-data:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

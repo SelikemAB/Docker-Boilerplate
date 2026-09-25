@@ -1,0 +1,7 @@
+# Drop-in for the traefik stack: copy to stacks/networking/traefik/config/dynamic/teleport.yaml
+# Traefik re-encrypts to Teleport's web listener, which presents a self-signed certificate.
+# Verification is skipped only on this hop, which stays on the internal proxy network.
+http:
+  serversTransports:
+    teleport-transport:
+      insecureSkipVerify: true

@@ -1,0 +1,10 @@
+# Optional: direct mode. The manager connects inbound to the agent on TCP 3553.
+# Usage: docker compose -f compose.yaml -f compose.direct.yaml up -d
+# Bind to the management interface only (set BIND_ADDRESS to that IP) and firewall it to the manager.
+services:
+  arcane-agent:
+    environment:
+      EDGE_AGENT: "false"
+      AGENT_MODE: "true"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${ARCANE_AGENT_PORT:-3553}:3553"

@@ -1,0 +1,9 @@
+# Optional: publish the Local API / AppSec listener for bouncers outside Docker (e.g. a host
+# firewall bouncer). Binds to loopback by default; set BIND_ADDRESS for a specific interface.
+# Usage: docker compose -f compose.yaml -f compose.expose-ports.yaml up -d
+
+services:
+  crowdsec:
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${CROWDSEC_LAPI_PORT:-8080}:8080"
+      - "${BIND_ADDRESS:-127.0.0.1}:${CROWDSEC_APPSEC_PORT:-7422}:7422"

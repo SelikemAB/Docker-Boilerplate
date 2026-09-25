@@ -1,0 +1,8 @@
+# Host log acquisition. The host's log directory is mounted read-only at /var/log-host.
+# Adjust the file list to your distribution (e.g. /var/log-host/secure and /var/log-host/messages
+# on RHEL). Additional sources go in acquis.d/ (see config/optional/ for ready-made examples).
+filenames:
+  - /var/log-host/auth.log
+  - /var/log-host/syslog
+labels:
+  type: syslog

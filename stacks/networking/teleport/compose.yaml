@@ -1,0 +1,67 @@
+# Teleport — hardened identity-aware access proxy (auth + proxy in one node)
+# Docs: https://goteleport.com/docs/admin-guides/deploy-a-cluster/
+# - Distroless image, all capabilities dropped, read-only root FS
+# - Web/proxy listener (multiplexed TLS routing) published through Traefik on 443
+# - Direct listener ports only via the opt-in compose.expose-ports.yaml override
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  teleport:
+    <<: *hardening
+    image: public.ecr.aws/gravitational/teleport-distroless:18.10.0
+    container_name: ${CONTAINER_NAME:-teleport}
+    # The image runs as root (UID 0). With every capability dropped and only
+    # unprivileged listener ports (3080/3025, SSH service disabled), root has no extra
+    # power beyond owning /var/lib/teleport.
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./config:/etc/teleport:ro
+      - teleport-data:/var/lib/teleport
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      # Apex host plus any subdomain (Application Access uses <app>.${TELEPORT_PUBLIC_HOST}).
+      # (Dots in the host are not escaped; the regex is marginally broader than the exact host.)
+      traefik.http.routers.teleport.rule: HostRegexp(`^(?i)(?:[[:alnum:]]+(?:-+[[:alnum:]]+)*\.)?${TELEPORT_PUBLIC_HOST}(?::\d+)?$$`)
+      traefik.http.routers.teleport.entrypoints: websecure
+      traefik.http.routers.teleport.tls.domains[0].main: ${TELEPORT_PUBLIC_HOST}
+      traefik.http.routers.teleport.tls.domains[0].sans: "*.${TELEPORT_PUBLIC_HOST}"
+      traefik.http.services.teleport.loadbalancer.server.port: "3080"
+      traefik.http.services.teleport.loadbalancer.server.scheme: https
+      # Teleport's web listener uses a self-signed cert behind Traefik. The transport is a
+      # file-provider resource: copy traefik-dynamic/teleport.yaml into the traefik stack.
+      traefik.http.services.teleport.loadbalancer.serversTransport: teleport-transport@file
+    networks: [proxy]
+    healthcheck:
+      # No shell or HTTP client in the distroless image. `tctl status` talks to the local
+      # auth service using the host identity in /var/lib/teleport.
+      test: ["CMD", "tctl", "status"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    stop_grace_period: 30s
+    pids_limit: 500
+    deploy:
+      resources:
+        limits: { cpus: "${TELEPORT_CPUS:-2.0}", memory: "${TELEPORT_MEMORY:-2G}" }
+
+volumes:
+  teleport-data:   # cluster state (sqlite backend), CA keys, audit log, session recordings
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

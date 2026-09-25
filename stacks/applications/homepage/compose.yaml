@@ -1,0 +1,136 @@
+# Homepage — application dashboard with service and Docker integrations
+# Docs: https://gethomepage.dev
+# - Non-root (UID 1000), no capabilities, built-in password/OIDC auth gate enabled
+# - Docker integration through a read-only, filtered socket proxy on an internal network
+# - Reached only through Traefik, restricted to internal networks by default
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  socket-proxy:
+    <<: *hardening
+    image: docker.io/tecnativa/docker-socket-proxy:v0.5.0
+    container_name: homepage-socket-proxy
+    read_only: true
+    tmpfs: [/tmp, /run]
+    environment:
+      # Read-only access to what Homepage's container status/stats widgets need.
+      CONTAINERS: 1
+      VERSION: 1
+      PING: 1
+      POST: 0
+      LOG_LEVEL: warning
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
+    networks: [socket]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:2375/_ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    pids_limit: 100
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
+
+  homepage:
+    <<: *hardening
+    image: ghcr.io/gethomepage/homepage:v2.4.0
+    container_name: ${CONTAINER_NAME:-homepage}
+    user: "${PUID:-1000}:${PGID:-1000}"
+    depends_on:
+      socket-proxy: { condition: service_healthy }
+      init-perms: { condition: service_completed_successfully }
+    # Homepage has no *_FILE support for its auth settings, so the wrapper loads them from
+    # Docker secrets into the process environment before the upstream entrypoint runs.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        export HOMEPAGE_AUTH_SECRET="$$(cat /run/secrets/homepage_auth_secret)"
+        HOMEPAGE_AUTH_PASSWORD="$$(cat /run/secrets/homepage_auth_password)" &&
+        exec docker-entrypoint.sh "$$@"
+      - homepage-entrypoint
+    command: ["node", "server.js"]
+    environment:
+      TZ: ${TZ:-UTC}
+      # Required since v1.0: the Host header must match (localhost:3000 is always allowed).
+      HOMEPAGE_ALLOWED_HOSTS: ${HOMEPAGE_HOST}
+      LOG_LEVEL: ${HOMEPAGE_LOG_LEVEL:-info}
+      # Auth gate (new in v2.0). Password login unless the OIDC variables are set.
+      HOMEPAGE_AUTH_ENABLED: ${HOMEPAGE_AUTH_ENABLED:-true}
+      HOMEPAGE_EXTERNAL_URL: https://${HOMEPAGE_HOST}
+      HOMEPAGE_OIDC_ISSUER: ${HOMEPAGE_OIDC_ISSUER:-}
+      HOMEPAGE_OIDC_CLIENT_ID: ${HOMEPAGE_OIDC_CLIENT_ID:-}
+      HOMEPAGE_OIDC_CLIENT_SECRET: ${HOMEPAGE_OIDC_CLIENT_SECRET:-}
+      NEXT_TELEMETRY_DISABLED: "1"
+    secrets: [homepage_auth_secret, homepage_auth_password]
+    volumes:
+      - homepage-config:/app/config
+      - homepage-images:/app/public/images
+      - homepage-icons:/app/public/icons
+      # Points the Docker integration at the socket proxy (read-only, overrides the skeleton).
+      - ./config/docker.yaml:/app/config/docker.yaml:ro
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.homepage.rule: Host(`${HOMEPAGE_HOST}`)
+      traefik.http.routers.homepage.entrypoints: websecure
+      traefik.http.routers.homepage.middlewares: ${HOMEPAGE_MIDDLEWARES:-internal-only@file}
+      traefik.http.services.homepage.loadbalancer.server.port: "3000"
+    networks: [proxy, socket]
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider -Y off http://127.0.0.1:3000/api/healthcheck || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    pids_limit: 200
+    deploy:
+      resources:
+        limits: { cpus: "${HOMEPAGE_CPUS:-1.0}", memory: "${HOMEPAGE_MEMORY:-512M}" }
+
+  # One-shot helper: makes the named volumes writable by the non-root Homepage user.
+  init-perms:
+    image: ghcr.io/gethomepage/homepage:v2.4.0
+    restart: "no"
+    entrypoint: ["sh", "-c", "chown -R ${PUID:-1000}:${PGID:-1000} /app/config /app/public/images /app/public/icons"]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]  # needed only to chown the volumes
+    network_mode: none
+    volumes:
+      - homepage-config:/app/config
+      - homepage-images:/app/public/images
+      - homepage-icons:/app/public/icons
+    logging: *logging
+    pids_limit: 20
+    deploy:
+      resources:
+        limits: { cpus: "0.1", memory: 32M }
+
+secrets:
+  homepage_auth_secret:
+    file: ./secrets/homepage_auth_secret
+  homepage_auth_password:
+    file: ./secrets/homepage_auth_password
+
+volumes:
+  homepage-config:
+  homepage-images:
+  homepage-icons:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  socket:
+    internal: true

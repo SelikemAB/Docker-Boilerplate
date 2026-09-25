@@ -1,0 +1,159 @@
+# authentik — hardened identity provider (OAuth2/OIDC, SAML, LDAP, SCIM, forward auth)
+# Docs: https://docs.goauthentik.io/
+# - Server and worker run as the image's non-root user (UID 1000) with a read-only root FS
+# - All secrets via Docker secrets using authentik's file:// config URIs
+# - No Docker socket: the Docker outpost integration is opt-in via compose.docker-outposts.yaml
+# - PostgreSQL on an internal network; published through Traefik only
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+# Settings shared by server and worker. authentik resolves file:// values itself,
+# so secrets never appear in the environment or in `docker inspect`.
+x-authentik-env: &authentik-env
+  TZ: ${TZ:-UTC}
+  AUTHENTIK_SECRET_KEY: file:///run/secrets/authentik_secret_key
+  AUTHENTIK_POSTGRESQL__HOST: postgres
+  AUTHENTIK_POSTGRESQL__PORT: "5432"
+  AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER:-authentik}
+  AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB:-authentik}
+  AUTHENTIK_POSTGRESQL__PASSWORD: file:///run/secrets/postgres_password
+  AUTHENTIK_ERROR_REPORTING__ENABLED: ${AUTHENTIK_ERROR_REPORTING:-false}
+  AUTHENTIK_DISABLE_UPDATE_CHECK: ${AUTHENTIK_DISABLE_UPDATE_CHECK:-true}
+  AUTHENTIK_LOG_LEVEL: ${AUTHENTIK_LOG_LEVEL:-info}
+  # Unattended admin bootstrap and SMTP are opt-in overrides:
+  # compose.bootstrap.yaml and compose.smtp.yaml (see README).
+
+services:
+  server:
+    <<: *hardening
+    image: ghcr.io/goauthentik/server:2026.8.3
+    container_name: authentik-server
+    command: server
+    user: "1000:1000"
+    read_only: true
+    tmpfs: [/tmp]
+    # TMPDIR is /dev/shm in the image (gunicorn worker tmp, Prometheus multiproc, mode file).
+    shm_size: ${AUTHENTIK_SHM_SIZE:-512m}
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      <<: *authentik-env
+    secrets: [authentik_secret_key, postgres_password]
+    volumes:
+      - authentik-data:/data
+      - ./config/templates:/templates:ro
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      traefik.http.routers.authentik.rule: Host(`${AUTHENTIK_HOST}`)
+      traefik.http.routers.authentik.entrypoints: websecure
+      traefik.http.routers.authentik.service: authentik
+      traefik.http.services.authentik.loadbalancer.server.port: "9000"
+      # Forward-auth middleware other stacks can reference as `authentik@docker`.
+      traefik.http.middlewares.authentik.forwardauth.address: http://authentik-server:9000/outpost.goauthentik.io/auth/traefik
+      traefik.http.middlewares.authentik.forwardauth.trustForwardHeader: "true"
+      traefik.http.middlewares.authentik.forwardauth.authResponseHeaders: X-authentik-username,X-authentik-groups,X-authentik-entitlements,X-authentik-email,X-authentik-name,X-authentik-uid,X-authentik-jwt,X-authentik-meta-jwks,X-authentik-meta-outpost,X-authentik-meta-provider,X-authentik-meta-app,X-authentik-meta-version
+    networks: [proxy, backend]
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+    pids_limit: 400
+    deploy:
+      resources:
+        limits: { cpus: "${AUTHENTIK_SERVER_CPUS:-2.0}", memory: "${AUTHENTIK_SERVER_MEMORY:-1536M}" }
+
+  worker:
+    <<: *hardening
+    image: ghcr.io/goauthentik/server:2026.8.3
+    container_name: authentik-worker
+    command: worker
+    # Upstream runs the worker as root only to join the Docker socket group and chown
+    # volumes. Without the socket that is unnecessary: the image dirs are owned by UID 1000.
+    user: "1000:1000"
+    read_only: true
+    tmpfs: [/tmp]
+    shm_size: ${AUTHENTIK_SHM_SIZE:-512m}
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      <<: *authentik-env
+    secrets: [authentik_secret_key, postgres_password]
+    volumes:
+      - authentik-data:/data
+      - authentik-certs:/certs
+      - ./config/templates:/templates:ro
+    # egress: outbound SMTP, OAuth/SAML source metadata, webhooks.
+    networks: [backend, egress]
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+    pids_limit: 400
+    deploy:
+      resources:
+        limits: { cpus: "${AUTHENTIK_WORKER_CPUS:-2.0}", memory: "${AUTHENTIK_WORKER_MEMORY:-1536M}" }
+
+  postgres:
+    <<: *hardening
+    image: docker.io/library/postgres:18.6-alpine
+    container_name: authentik-postgres
+    user: "70:70"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    shm_size: 256m
+    environment:
+      TZ: ${TZ:-UTC}
+      POSTGRES_USER: ${POSTGRES_USER:-authentik}
+      POSTGRES_DB: ${POSTGRES_DB:-authentik}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256 --data-checksums"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    secrets: [postgres_password]
+    volumes:
+      - authentik-postgres:/var/lib/postgresql
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-1G}" }
+
+secrets:
+  authentik_secret_key:
+    file: ./secrets/authentik_secret_key
+  postgres_password:
+    file: ./secrets/postgres_password
+
+volumes:
+  authentik-data:
+  authentik-certs:
+  authentik-postgres:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  backend:
+    internal: true
+  egress:

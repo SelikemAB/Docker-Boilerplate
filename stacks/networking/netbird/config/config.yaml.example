@@ -1,0 +1,37 @@
+# NetBird combined server configuration (template).
+# Render it into secrets/netbird_config.yaml (see README). The rendered file contains
+# secrets, so it is mounted as a Docker secret and never committed.
+#   netbird.example.com       -> your public NetBird hostname (NETBIRD_HOST)
+#   __RELAY_AUTH_SECRET__     -> openssl rand -base64 32
+#   __STORE_ENCRYPTION_KEY__  -> openssl rand -base64 32
+server:
+  # Plain HTTP/h2c behind Traefik on an unprivileged port (non-root container).
+  listenAddress: ":8080"
+  # Public URL peers use; TLS terminates at Traefik on 443.
+  exposedAddress: "https://netbird.example.com:443"
+  stunPorts:
+    - 3478
+  # Internal only (not published). Scrape from a Prometheus on the proxy network.
+  metricsPort: 9090
+  healthcheckAddress: ":9000"
+  logLevel: "info"          # debug | info | warn | error
+  logFile: "console"
+  # Shared secret for relay authentication.
+  authSecret: "__RELAY_AUTH_SECRET__"
+  dataDir: "/var/lib/netbird"
+  disableAnonymousMetrics: true
+  disableGeoliteUpdate: false
+  auth:
+    issuer: "https://netbird.example.com/oauth2"
+    localAuthDisabled: false
+    signKeyRefreshEnabled: true
+    dashboardRedirectURIs:
+      - "https://netbird.example.com/nb-auth"
+      - "https://netbird.example.com/nb-silent-auth"
+    cliRedirectURIs:
+      - "http://localhost:53000/"
+  store:
+    engine: "sqlite"
+    dsn: ""
+    # Encrypts sensitive fields in the store. Losing it makes that data unreadable.
+    encryptionKey: "__STORE_ENCRYPTION_KEY__"

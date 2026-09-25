@@ -1,0 +1,6 @@
+# Optional: publish the web UI directly (the original template's default), without Traefik.
+# Usage: docker compose -f compose.yaml -f compose.expose-ports.yaml up -d
+services:
+  uptimekuma:
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${UPTIMEKUMA_PORT:-3001}:3001"

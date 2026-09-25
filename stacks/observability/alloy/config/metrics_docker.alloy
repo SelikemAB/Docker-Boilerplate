@@ -1,0 +1,23 @@
+// Container metrics (embedded cAdvisor) via the read-only Docker socket proxy.
+// Delete this file to disable Docker metrics collection.
+prometheus.exporter.cadvisor "dockermetrics" {
+  docker_host      = "tcp://socket-proxy:2375"
+  storage_duration = "5m"
+}
+
+// Drop container_spec metrics that often have NaN values.
+prometheus.relabel "docker_filter" {
+  forward_to = [prometheus.remote_write.default.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "container_spec_(cpu_period|cpu_quota|cpu_shares|memory_limit_bytes|memory_swap_limit_bytes|memory_reservation_limit_bytes)"
+    action        = "drop"
+  }
+}
+
+prometheus.scrape "dockermetrics" {
+  targets         = prometheus.exporter.cadvisor.dockermetrics.targets
+  forward_to      = [prometheus.relabel.docker_filter.receiver]
+  scrape_interval = "10s"
+}

@@ -1,0 +1,67 @@
+# GitLab Runner — Docker executor
+# Docs: https://docs.gitlab.com/runner/install/docker/
+# - config.toml rendered at start from config/config.toml.tmpl; token from a Docker secret
+# - No capabilities, read-only root FS
+# - Needs the host Docker socket: run it on a DEDICATED, disposable host (see README)
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  gitlab-runner:
+    <<: *hardening
+    image: docker.io/gitlab/gitlab-runner:alpine-v19.4.1
+    container_name: ${CONTAINER_NAME:-gitlab-runner}
+    # Runs as root (the image default) so it can use the root-owned Docker socket; with all
+    # capabilities dropped. The shell executor would additionally need SETUID/SETGID.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/gitlab-runner
+    entrypoint: ["/usr/bin/dumb-init", "--", "/bin/sh", "/opt/gitlab-runner/render-config.sh"]
+    command: ["run", "--user=gitlab-runner", "--working-directory=/home/gitlab-runner"]
+    environment:
+      TZ: ${TZ:-UTC}
+      GITLAB_URL: ${GITLAB_URL}
+      RUNNER_NAME: ${RUNNER_NAME:-gitlab-runner}
+      RUNNER_CONCURRENT: ${RUNNER_CONCURRENT:-4}
+      RUNNER_EXECUTOR_IMAGE: ${RUNNER_EXECUTOR_IMAGE:-docker.io/library/alpine:3.24.2}
+      RUNNER_PRIVILEGED: ${RUNNER_PRIVILEGED:-false}
+    secrets: [gitlab_runner_token]
+    volumes:
+      - ./config/config.toml.tmpl:/opt/gitlab-runner/config.toml.tmpl:ro
+      - ./config/render-config.sh:/opt/gitlab-runner/render-config.sh:ro
+      # Rendered config.toml plus the persistent .runner_system_id
+      - gitlab-runner-config:/etc/gitlab-runner
+      # HARDENING-EXCEPTION: docker socket — the Docker executor creates, starts and removes job containers, which requires full (root-equivalent) Docker API access.
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+    networks: [runner]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9252/metrics || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 1h  # SIGQUIT lets running jobs finish
+    pids_limit: 500
+    deploy:
+      resources:
+        limits: { cpus: "${RUNNER_CPUS:-1.0}", memory: "${RUNNER_MEMORY:-512M}" }
+
+secrets:
+  gitlab_runner_token:
+    file: ./secrets/gitlab_runner_token
+
+volumes:
+  gitlab-runner-config:
+
+networks:
+  # Needs egress to GitLab; job containers use the Docker daemon's own networks.
+  runner:

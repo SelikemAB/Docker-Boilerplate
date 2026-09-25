@@ -1,0 +1,16 @@
+# Reverse-proxy site. Rename to reverse-proxy.caddy (only *.caddy files are loaded),
+# set the address and upstream, attach the upstream container to the `caddy` network,
+# then reload: docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
+app.example.com {
+	import security
+	encode zstd gzip
+	reverse_proxy app:3000 {
+		# Optional reverse_proxy subdirectives, e.g.:
+		# header_up X-Real-IP {remote_host}
+		# health_uri /healthz
+	}
+	log {
+		output stdout
+		format json
+	}
+}

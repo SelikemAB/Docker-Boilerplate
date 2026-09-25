@@ -1,0 +1,7 @@
+# Optional: publish the InfluxDB API directly (e.g. for Telegraf agents on other hosts).
+# Usage: docker compose -f compose.yaml -f compose.expose-ports.yaml up -d
+# Plain HTTP: prefer Traefik (HTTPS) or keep BIND_ADDRESS on a trusted interface.
+services:
+  influxdb:
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${INFLUXDB_PORT:-8086}:8086"

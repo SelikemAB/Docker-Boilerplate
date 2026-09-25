@@ -1,0 +1,11 @@
+# Optional: publish Technitium's native encrypted DNS listeners.
+#   docker compose -f compose.yaml -f compose.encrypted-dns.yaml up -d
+# Enable DNS-over-TLS / DNS-over-QUIC and add a certificate under Settings -> Optional Protocols
+# first. DNS-over-HTTPS doesn't need this file: Traefik serves it on 443 at /dns-query.
+
+services:
+  technitium:
+    ports:
+      # HARDENING-EXCEPTION: port — public DoT/DoQ listeners are the purpose of this override.
+      - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DOT_PORT:-853}:853/tcp"
+      - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DOQ_PORT:-853}:853/udp"

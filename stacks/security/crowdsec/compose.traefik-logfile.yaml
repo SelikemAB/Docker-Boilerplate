@@ -1,0 +1,9 @@
+# Optional: read Traefik access logs from a host directory (when Traefik writes to a file).
+# Usage:
+#   cp config/optional/traefik-file.yaml config/acquis.d/traefik-file.yaml
+#   docker compose -f compose.yaml -f compose.traefik-logfile.yaml up -d
+
+services:
+  crowdsec:
+    volumes:
+      - ${TRAEFIK_LOG_DIR:-/var/log/traefik}:/var/log/traefik:ro

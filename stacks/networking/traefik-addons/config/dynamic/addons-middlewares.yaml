@@ -1,0 +1,50 @@
+# traefik-addons: extra middlewares and chains for the traefik stack.
+# Install: copy into stacks/networking/traefik/config/dynamic/ (the file provider watches it).
+# Builds on security.yaml from the traefik stack (security-headers, internal-only,
+# rate-limit), so do not redefine those names here.
+# security-headers is already applied to every router on the websecure entrypoint.
+http:
+  middlewares:
+    # --- Authentication -------------------------------------------------------------
+    # authentik (embedded outpost) forward auth. Traefik must share a network with
+    # authentik-server; adjust the address to your outpost if you use a standalone one.
+    forward-auth:
+      forwardAuth:
+        address: "http://authentik-server:9000/outpost.goauthentik.io/auth/traefik"
+        # Don't trust client-supplied X-Forwarded-* headers at the edge; Traefik sets them.
+        trustForwardHeader: false
+        authResponseHeadersRegex: "^X-authentik-.*"
+
+    # bcrypt basic auth, reusing the traefik stack's dashboard_users secret.
+    dashboard-basicauth:
+      basicAuth:
+        usersFile: /run/secrets/dashboard_users
+        removeHeader: true
+
+    # --- Chains -----------------------------------------------------------------------
+    # Public app with abuse protection.
+    default-secured:
+      chain:
+        middlewares:
+          - rate-limit
+
+    # Private address space only.
+    internal-secured:
+      chain:
+        middlewares:
+          - internal-only
+          - rate-limit
+
+    # Single sign-on via authentik.
+    sso-secured:
+      chain:
+        middlewares:
+          - rate-limit
+          - forward-auth
+
+    # Admin dashboards: private networks + basic auth.
+    dashboard-secured:
+      chain:
+        middlewares:
+          - internal-only
+          - dashboard-basicauth

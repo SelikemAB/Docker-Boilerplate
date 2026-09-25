@@ -1,0 +1,70 @@
+# Portainer CE — hardened Docker management UI
+# Docs: https://docs.portainer.io/
+# - Admin password from a Docker secret (--admin-password-file), no open setup window
+# - Read-only root FS, all capabilities dropped, published only through Traefik (internal-only)
+# - Edge-agent tunnel port is opt-in (compose.edge.yaml)
+# WARNING: Portainer has full control of the Docker API. Access to Portainer is equivalent
+# to root on the host. See README.
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  portainer:
+    <<: *hardening
+    image: docker.io/portainer/portainer-ce:2.45.1-alpine
+    container_name: ${CONTAINER_NAME:-portainer}
+    # Runs as root (upstream default): it owns /data and the root-owned socket.
+    # No capabilities are added back.
+    read_only: true
+    tmpfs: [/tmp]
+    command:
+      - -H
+      - unix:///var/run/docker.sock
+      - --admin-password-file
+      - /run/secrets/portainer_admin_password
+    environment:
+      TZ: ${TZ:-UTC}
+    secrets: [portainer_admin_password]
+    volumes:
+      # HARDENING-EXCEPTION: docker socket — Portainer is a full container-management platform (stacks, exec, volumes, images); it requires unrestricted Docker API access. A `:ro` flag would not restrict the API.
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - portainer-data:/data
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      traefik.http.routers.portainer.rule: Host(`${PORTAINER_HOST}`)
+      traefik.http.routers.portainer.entrypoints: websecure
+      traefik.http.routers.portainer.middlewares: internal-only@file
+      traefik.http.routers.portainer.service: portainer
+      traefik.http.services.portainer.loadbalancer.server.port: "9000"
+    networks: [proxy]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9000/api/system/status || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${PORTAINER_CPUS:-1.0}", memory: "${PORTAINER_MEMORY:-512M}" }
+
+secrets:
+  portainer_admin_password:
+    file: ./secrets/portainer_admin_password
+
+volumes:
+  portainer-data:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

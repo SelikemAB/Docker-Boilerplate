@@ -1,0 +1,7 @@
+# Docker instances for Homepage's container status/stats integration.
+# Reference: https://gethomepage.dev/configs/docker/
+# The API is reached through the read-only socket proxy on the internal "socket" network.
+# Use it from services.yaml with:  server: local-docker  and  container: <name>
+local-docker:
+  host: socket-proxy
+  port: 2375

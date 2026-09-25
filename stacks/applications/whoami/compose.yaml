@@ -1,0 +1,44 @@
+# whoami — tiny HTTP echo service for testing the reverse proxy
+# Docs: https://github.com/traefik/whoami
+# - Static Go binary on a scratch image: non-root, read-only root FS, no capabilities
+# - Listens on unprivileged port 8080 inside the container; reached only through Traefik
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  whoami:
+    <<: *hardening
+    image: docker.io/traefik/whoami:v1.12.0
+    container_name: ${CONTAINER_NAME:-whoami}
+    hostname: ${WHOAMI_HOSTNAME:-whoami}
+    user: "65532:65532"
+    read_only: true
+    environment:
+      TZ: ${TZ:-UTC}
+      # Unprivileged port, so no NET_BIND_SERVICE is needed.
+      WHOAMI_PORT_NUMBER: "8080"
+      WHOAMI_NAME: ${WHOAMI_NAME:-whoami}
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.whoami.rule: Host(`${WHOAMI_HOST}`)
+      traefik.http.routers.whoami.entrypoints: websecure
+      traefik.http.services.whoami.loadbalancer.server.port: "8080"
+    networks: [proxy]
+    # HARDENING-EXCEPTION: healthcheck — scratch image with only the /whoami binary (no shell, wget or curl, no probe flag). Monitor GET /health externally instead.
+    pids_limit: 50
+    deploy:
+      resources:
+        limits: { cpus: "${WHOAMI_CPUS:-0.25}", memory: "${WHOAMI_MEMORY:-32M}" }
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

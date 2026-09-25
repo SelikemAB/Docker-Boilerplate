@@ -1,0 +1,9 @@
+# Optional: publish the web UI directly (e.g. on a host without Traefik).
+#   docker compose -f compose.yaml -f compose.expose-ports.yaml up -d
+# Loopback by default: reach it with an SSH tunnel, or set BIND_ADDRESS to a management IP.
+# Plain HTTP, so don't expose it to untrusted networks.
+
+services:
+  pihole:
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PIHOLE_WEB_PORT:-8080}:80/tcp"

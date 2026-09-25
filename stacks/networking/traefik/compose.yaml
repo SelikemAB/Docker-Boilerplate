@@ -1,0 +1,157 @@
+# Traefik — hardened edge reverse proxy
+# Docs: https://doc.traefik.io/traefik/
+# - Runs as non-root on unprivileged container ports (8080/8443), read-only root FS
+# - Talks to Docker only through a read-only, filtered socket proxy
+# - Dashboard served over HTTPS behind basic-auth (no --api.insecure)
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  socket-proxy:
+    <<: *hardening
+    image: docker.io/tecnativa/docker-socket-proxy:v0.5.0
+    container_name: traefik-socket-proxy
+    read_only: true
+    tmpfs: [/tmp, /run]
+    environment:
+      # Read-only access to the endpoints Traefik's Docker provider needs.
+      CONTAINERS: 1
+      NETWORKS: 1
+      EVENTS: 1
+      VERSION: 1
+      PING: 1
+      POST: 0
+      LOG_LEVEL: warning
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
+    networks: [socket]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:2375/_ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    pids_limit: 100
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
+
+  traefik:
+    <<: *hardening
+    image: docker.io/library/traefik:v3.7.13
+    container_name: traefik
+    user: "${PUID:-65532}:${PGID:-65532}"
+    read_only: true
+    depends_on:
+      socket-proxy: { condition: service_healthy }
+      init-perms: { condition: service_completed_successfully }
+    command:
+      - --global.checkNewVersion=false
+      - --global.sendAnonymousUsage=false
+      - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
+      - --log.format=json
+      - --accesslog=true
+      - --accesslog.format=json
+      - --accesslog.fields.headers.defaultmode=drop
+      - --ping=true
+      - --ping.entryPoint=ping
+      - --api.dashboard=true
+      - --api.insecure=false
+      # Entrypoints listen on unprivileged ports inside the container.
+      - --entrypoints.ping.address=:8082
+      - --entrypoints.metrics.address=:9100
+      - --entrypoints.web.address=:8080
+      - --entrypoints.web.http.redirections.entryPoint.to=websecure
+      - --entrypoints.web.http.redirections.entryPoint.scheme=https
+      - --entrypoints.web.http.redirections.entryPoint.permanent=true
+      - --entrypoints.websecure.address=:8443
+      - --entrypoints.websecure.http.tls=true
+      - --entrypoints.websecure.http.tls.certResolver=letsencrypt
+      - --entrypoints.websecure.http.middlewares=security-headers@file
+      - --entrypoints.websecure.http3=${TRAEFIK_HTTP3:-false}
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entryPoint=metrics
+      - --metrics.prometheus.addRoutersLabels=true
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/certs/acme.json
+      - --certificatesresolvers.letsencrypt.acme.caServer=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+      - --certificatesresolvers.letsencrypt.acme.dnsChallenge.provider=${ACME_DNS_PROVIDER:-cloudflare}
+      - --certificatesresolvers.letsencrypt.acme.dnsChallenge.resolvers=1.1.1.1:53,9.9.9.9:53
+      - --providers.docker=true
+      - --providers.docker.endpoint=tcp://socket-proxy:2375
+      - --providers.docker.exposedByDefault=false
+      - --providers.docker.network=${PROXY_NETWORK:-proxy}
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+    ports:
+      # HARDENING-EXCEPTION: port — the edge proxy must listen on all interfaces by default.
+      - "${EDGE_BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-80}:8080"
+      - "${EDGE_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:8443"
+      - "${EDGE_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:8443/udp"
+    environment:
+      TZ: ${TZ:-UTC}
+      # lego reads any provider variable from a file via the *_FILE suffix.
+      # Cloudflare shown; see README for other DNS providers.
+      CF_DNS_API_TOKEN_FILE: /run/secrets/acme_dns_token
+    secrets: [acme_dns_token, dashboard_users]
+    volumes:
+      - traefik-certs:/certs
+      - ./config/dynamic:/etc/traefik/dynamic:ro
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.dashboard.rule: Host(`${TRAEFIK_DASHBOARD_HOST}`)
+      traefik.http.routers.dashboard.entrypoints: websecure
+      traefik.http.routers.dashboard.service: api@internal
+      traefik.http.routers.dashboard.middlewares: dashboard-auth@docker,internal-only@file
+      traefik.http.middlewares.dashboard-auth.basicauth.usersfile: /run/secrets/dashboard_users
+    networks: [proxy, socket]
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping", "--ping.entryPoint=ping", "--entrypoints.ping.address=:8082"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    pids_limit: 200
+    deploy:
+      resources:
+        limits: { cpus: "${TRAEFIK_CPUS:-1.0}", memory: "${TRAEFIK_MEMORY:-512M}" }
+
+  # One-shot helper: makes the certs volume writable by the non-root Traefik user.
+  init-perms:
+    image: docker.io/library/traefik:v3.7.13
+    restart: "no"
+    entrypoint: ["sh", "-c", "chown -R ${PUID:-65532}:${PGID:-65532} /certs && chmod 700 /certs"]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]  # needed only to chown the certs volume
+    network_mode: none
+    volumes: [traefik-certs:/certs]
+    logging: *logging
+    pids_limit: 20
+    deploy:
+      resources:
+        limits: { cpus: "0.1", memory: 32M }
+
+secrets:
+  acme_dns_token:
+    file: ./secrets/acme_dns_token
+  dashboard_users:
+    file: ./secrets/dashboard_users
+
+volumes:
+  traefik-certs:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  socket:
+    internal: true
