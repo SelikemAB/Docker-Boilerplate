@@ -85,6 +85,10 @@ services:
     shm_size: ${AUTHENTIK_SHM_SIZE:-512m}
     depends_on:
       postgres: { condition: service_healthy }
+      # Create the worker only after the server. Both share authentik-data, and on a fresh
+      # volume Docker copies the image contents in when each container is created: two
+      # creates at once race ("failed to create symlink ... media: file exists").
+      server: { condition: service_started }
     environment:
       <<: *authentik-env
     secrets: [authentik_secret_key, postgres_password]
