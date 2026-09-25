@@ -28,7 +28,7 @@ engine. Every stack follows one security baseline, enforced by CI:
 ## Quick start
 
 ```bash
-git clone https://github.com/<your-account>/Docker-Boilerplate.git
+git clone https://github.com/SelikemAB/Docker-Boilerplate.git
 cd Docker-Boilerplate
 docker network create proxy
 
