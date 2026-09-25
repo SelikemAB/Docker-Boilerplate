@@ -33,7 +33,7 @@ image cannot work otherwise, and **must** be documented in the stack's `README.m
 | Rule | Detail |
 |---|---|
 | **[L]** Memory & CPU limits | `deploy.resources.limits` (`cpus`, `memory`) on every service, with sensible defaults overridable via `.env`. |
-| **[L]** PID limit | `pids_limit` on every service (fork-bomb protection). |
+| **[L]** PID limit | `deploy.resources.limits.pids` on every service (fork-bomb protection). Don't use the legacy `pids_limit` key: current Compose rejects it alongside `deploy.resources.limits`. |
 | **[L]** Log rotation | `logging` with the `json-file` (or `local`) driver, `max-size` and `max-file`. |
 | **[L]** Restart policy | `restart: unless-stopped`; one-shot init jobs use `restart: "no"` and are awaited with `condition: service_completed_successfully`. |
 
@@ -97,4 +97,4 @@ x-hardening: &hardening
   logging: *logging
 ```
 
-Services then use `<<: *hardening` and add their own `cap_add`, `deploy`, `pids_limit`, `healthcheck`, etc.
+Services then use `<<: *hardening` and add their own `cap_add`, `deploy` (cpus/memory/pids limits), `healthcheck`, etc.

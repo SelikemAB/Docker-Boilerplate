@@ -39,10 +39,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    pids_limit: 512
     deploy:
       resources:
-        limits: { cpus: "${OLLAMA_CPUS:-4.0}", memory: "${OLLAMA_MEMORY:-16G}" }
+        limits: { cpus: "${OLLAMA_CPUS:-4.0}", memory: "${OLLAMA_MEMORY:-16G}", pids: 512 }
         # NVIDIA GPU (requires nvidia-container-toolkit on the host):
         # reservations:
         #   devices:

@@ -73,10 +73,11 @@ def lint_compose(path: pathlib.Path):
         if svc.get("network_mode") == "host" and not has_exception(text, "host network"):
             errors.append(f"{where}: network_mode: host in base file (move to an override)")
         limits = ((svc.get("deploy") or {}).get("resources") or {}).get("limits") or {}
-        if not ({"cpus", "memory"} <= set(limits)):
-            errors.append(f"{where}: missing deploy.resources.limits cpus/memory")
-        if "pids_limit" not in svc:
-            errors.append(f"{where}: missing pids_limit")
+        if not ({"cpus", "memory", "pids"} <= set(limits)):
+            errors.append(f"{where}: missing deploy.resources.limits cpus/memory/pids")
+        if "pids_limit" in svc:
+            # Current Compose rejects pids_limit alongside deploy.resources.limits.
+            errors.append(f"{where}: use deploy.resources.limits.pids instead of pids_limit")
         log = svc.get("logging") or {}
         if log.get("driver") not in ("json-file", "local") or "max-size" not in (log.get("options") or {}):
             errors.append(f"{where}: missing rotated logging (json-file/local + max-size)")

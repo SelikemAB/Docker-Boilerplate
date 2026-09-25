@@ -47,10 +47,9 @@ services:
       timeout: 30s
       retries: 5
       start_period: 60s
-    pids_limit: 500
     deploy:
       resources:
-        limits: { cpus: "${DOCKGE_CPUS:-1.0}", memory: "${DOCKGE_MEMORY:-1G}" }
+        limits: { cpus: "${DOCKGE_CPUS:-1.0}", memory: "${DOCKGE_MEMORY:-1G}", pids: 500 }
 
 volumes:
   dockge-data:

@@ -42,10 +42,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    pids_limit: 100
     deploy:
       resources:
-        limits: { cpus: "0.25", memory: 64M }
+        limits: { cpus: "0.25", memory: 64M, pids: 100 }
 
   worker:
     depends_on:

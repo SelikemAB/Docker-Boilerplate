@@ -52,10 +52,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${PORTAINER_CPUS:-1.0}", memory: "${PORTAINER_MEMORY:-512M}" }
+        limits: { cpus: "${PORTAINER_CPUS:-1.0}", memory: "${PORTAINER_MEMORY:-512M}", pids: 300 }
 
 secrets:
   portainer_admin_password:

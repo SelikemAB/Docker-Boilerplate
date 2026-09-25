@@ -53,10 +53,9 @@ services:
       retries: 5
       start_period: 30s
     stop_grace_period: 60s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${MARIADB_CPUS:-2.0}", memory: "${MARIADB_MEMORY:-2G}" }
+        limits: { cpus: "${MARIADB_CPUS:-2.0}", memory: "${MARIADB_MEMORY:-2G}", pids: 300 }
 
 secrets:
   mariadb_password:

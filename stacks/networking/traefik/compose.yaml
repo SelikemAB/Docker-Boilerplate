@@ -39,10 +39,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    pids_limit: 100
     deploy:
       resources:
-        limits: { cpus: "0.25", memory: 64M }
+        limits: { cpus: "0.25", memory: 64M, pids: 100 }
 
   traefik:
     <<: *hardening
@@ -119,10 +118,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    pids_limit: 200
     deploy:
       resources:
-        limits: { cpus: "${TRAEFIK_CPUS:-1.0}", memory: "${TRAEFIK_MEMORY:-512M}" }
+        limits: { cpus: "${TRAEFIK_CPUS:-1.0}", memory: "${TRAEFIK_MEMORY:-512M}", pids: 200 }
 
   # One-shot helper: makes the certs volume writable by the non-root Traefik user.
   init-perms:
@@ -135,10 +133,9 @@ services:
     network_mode: none
     volumes: [traefik-certs:/certs]
     logging: *logging
-    pids_limit: 20
     deploy:
       resources:
-        limits: { cpus: "0.1", memory: 32M }
+        limits: { cpus: "0.1", memory: 32M, pids: 20 }
 
 secrets:
   acme_dns_token:

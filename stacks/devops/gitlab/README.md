@@ -72,7 +72,7 @@ All settings live in `config/gitlab.rb`, which reads values from the environment
   enabled, stays inside the container.
 - **Exception:** the Git SSH port binds `0.0.0.0` by default (`SSH_BIND_ADDRESS`), because Git
   clients must reach it. Restrict it with a host firewall or set a specific interface IP.
-- The high `pids_limit` (4096) is intentional: GitLab's services together run thousands of threads.
+- The high PID limit (`deploy.resources.limits.pids: 4096`) is intentional: GitLab's services together run thousands of threads.
 
 ## Backup
 

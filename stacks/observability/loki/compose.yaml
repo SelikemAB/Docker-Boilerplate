@@ -50,10 +50,9 @@ services:
       retries: 5
       start_period: 60s
     stop_grace_period: 30s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${LOKI_CPUS:-1.0}", memory: "${LOKI_MEMORY:-1G}" }
+        limits: { cpus: "${LOKI_CPUS:-1.0}", memory: "${LOKI_MEMORY:-1G}", pids: 300 }
 
 volumes:
   loki-data:

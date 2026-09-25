@@ -49,10 +49,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-    pids_limit: 200
     deploy:
       resources:
-        limits: { cpus: "${ADGUARD_CPUS:-1.0}", memory: "${ADGUARD_MEMORY:-512M}" }
+        limits: { cpus: "${ADGUARD_CPUS:-1.0}", memory: "${ADGUARD_MEMORY:-512M}", pids: 200 }
 
   init-config:
     <<: *hardening
@@ -71,10 +70,9 @@ services:
       - adguardhome-work:/opt/adguardhome/work
       - adguardhome-conf:/opt/adguardhome/conf
       - ./config:/seed:ro
-    pids_limit: 20
     deploy:
       resources:
-        limits: { cpus: "0.1", memory: 32M }
+        limits: { cpus: "0.1", memory: 32M, pids: 20 }
 
 secrets:
   adguard_admin:

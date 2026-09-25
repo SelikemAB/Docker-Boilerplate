@@ -51,10 +51,9 @@ services:
       retries: 3
       start_period: 30s
     stop_grace_period: 60s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${PROMETHEUS_CPUS:-1.0}", memory: "${PROMETHEUS_MEMORY:-2G}" }
+        limits: { cpus: "${PROMETHEUS_CPUS:-1.0}", memory: "${PROMETHEUS_MEMORY:-2G}", pids: 300 }
 
 volumes:
   prometheus-data:

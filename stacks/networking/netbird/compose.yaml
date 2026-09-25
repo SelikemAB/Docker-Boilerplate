@@ -56,10 +56,9 @@ services:
       retries: 3
       start_period: 30s
     stop_grace_period: 30s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${NETBIRD_CPUS:-2.0}", memory: "${NETBIRD_MEMORY:-1G}" }
+        limits: { cpus: "${NETBIRD_CPUS:-2.0}", memory: "${NETBIRD_MEMORY:-1G}", pids: 300 }
 
   dashboard:
     <<: *hardening
@@ -103,10 +102,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-    pids_limit: 100
     deploy:
       resources:
-        limits: { cpus: "${DASHBOARD_CPUS:-0.5}", memory: "${DASHBOARD_MEMORY:-256M}" }
+        limits: { cpus: "${DASHBOARD_CPUS:-0.5}", memory: "${DASHBOARD_MEMORY:-256M}", pids: 100 }
 
   # One-shot helper: makes the data volume writable by the non-root server user.
   init-perms:
@@ -119,10 +117,9 @@ services:
     network_mode: none
     volumes: [netbird-data:/var/lib/netbird]
     logging: *logging
-    pids_limit: 20
     deploy:
       resources:
-        limits: { cpus: "0.1", memory: 32M }
+        limits: { cpus: "0.1", memory: 32M, pids: 20 }
 
 secrets:
   netbird_config:

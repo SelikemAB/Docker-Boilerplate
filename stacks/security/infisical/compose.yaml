@@ -62,10 +62,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${INFISICAL_CPUS:-2.0}", memory: "${INFISICAL_MEMORY:-2G}" }
+        limits: { cpus: "${INFISICAL_CPUS:-2.0}", memory: "${INFISICAL_MEMORY:-2G}", pids: 300 }
 
   postgres:
     <<: *hardening
@@ -95,10 +94,9 @@ services:
       retries: 5
       start_period: 30s
     stop_grace_period: 60s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-1G}" }
+        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-1G}", pids: 300 }
 
   redis:
     <<: *hardening
@@ -125,10 +123,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    pids_limit: 100
     deploy:
       resources:
-        limits: { cpus: "${REDIS_CPUS:-0.5}", memory: "${REDIS_MEMORY:-512M}" }
+        limits: { cpus: "${REDIS_CPUS:-0.5}", memory: "${REDIS_MEMORY:-512M}", pids: 100 }
 
 secrets:
   infisical_encryption_key:

@@ -65,10 +65,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    pids_limit: 1000
     deploy:
       resources:
-        limits: { cpus: "${RENOVATE_CPUS:-2.0}", memory: "${RENOVATE_MEMORY:-4G}" }
+        limits: { cpus: "${RENOVATE_CPUS:-2.0}", memory: "${RENOVATE_MEMORY:-4G}", pids: 1000 }
 
   # One-shot helper: makes the DB and log volumes writable by the non-root Renovate user.
   init-perms:
@@ -84,10 +83,9 @@ services:
       - renovate-db:/db
       - renovate-logs:/logs
     logging: *logging
-    pids_limit: 20
     deploy:
       resources:
-        limits: { cpus: "0.1", memory: 32M }
+        limits: { cpus: "0.1", memory: 32M, pids: 20 }
 
 volumes:
   renovate-db:

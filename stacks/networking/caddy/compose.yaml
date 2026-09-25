@@ -49,10 +49,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    pids_limit: 200
     deploy:
       resources:
-        limits: { cpus: "${CADDY_CPUS:-1.0}", memory: "${CADDY_MEMORY:-512M}" }
+        limits: { cpus: "${CADDY_CPUS:-1.0}", memory: "${CADDY_MEMORY:-512M}", pids: 200 }
 
 volumes:
   caddy-data:     # certificates, ACME account keys, OCSP staples
