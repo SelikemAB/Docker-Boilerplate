@@ -21,6 +21,9 @@ services:
     image: docker.io/adguard/adguardhome:v0.107.79
     container_name: ${CONTAINER_NAME:-adguardhome}
     user: "${ADGUARD_UID:-65534}:${ADGUARD_GID:-65534}"
+    # The AdGuardHome binary has the cap_net_bind_service file capability. The kernel refuses to
+    # exec it ("operation not permitted") unless that capability is in the bounding set.
+    cap_add: [NET_BIND_SERVICE]
     read_only: true
     tmpfs: [/tmp]
     depends_on:

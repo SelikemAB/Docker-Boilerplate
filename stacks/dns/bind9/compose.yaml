@@ -1,9 +1,9 @@
 # BIND 9 — hardened authoritative + recursive DNS server
 # Docs: https://hub.docker.com/r/ubuntu/bind9 , https://bind9.readthedocs.io/
-# - Runs as the unprivileged `bind` user on container port 5053 (host 53 -> 5053), no
-#   capabilities, read-only root FS
+# - Runs named directly (no pebble supervisor) as the unprivileged `bind` user (9970) on
+#   container port 5053 (host 53 -> 5053), no capabilities, read-only root FS
 # - Config mounted read-only, TSIG key as a Docker secret, DNSSEC inline signing
-# - Recursion limited to private networks, response rate limiting, no rndc channel
+# - Recursion limited to private networks, response rate limiting, rndc on loopback only
 
 x-logging: &logging
   driver: json-file
@@ -21,7 +21,10 @@ services:
     image: docker.io/ubuntu/bind9:9.20-26.04_edge
     container_name: ${CONTAINER_NAME:-bind9}
     hostname: ${BIND_HOSTNAME:-ns1}
-    user: "bind:bind"
+    # The image is a minimal Ubuntu "rock" (no shell). Bypass its pebble supervisor, which
+    # needs a writable state dir, and run named in the foreground as `bind` (9970).
+    user: "9970:9970"
+    entrypoint: ["/usr/sbin/named", "-g", "-c", "/etc/bind/named.conf"]
     read_only: true
     tmpfs:
       - /tmp
@@ -30,23 +33,23 @@ services:
       init-zones: { condition: service_completed_successfully }
     environment:
       TZ: ${TZ:-UTC}
-      BIND9_USER: bind
     ports:
       # HARDENING-EXCEPTION: port — a network DNS server must answer on all interfaces by default.
       - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DNS_PORT:-53}:5053/tcp"
       - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DNS_PORT:-53}:5053/udp"
-    secrets: [bind_tsig_key]
+    secrets: [bind_tsig_key, bind_rndc_key]
     volumes:
       - ./config/named.conf:/etc/bind/named.conf:ro
       - ./config/named.conf.zones:/etc/bind/named.conf.zones:ro
       - ./config/named.conf.listen:/etc/bind/named.conf.listen:ro
+      - ./config/rndc.conf:/etc/bind/rndc.conf:ro
       - bind9-zones:/var/lib/bind
       - bind9-cache:/var/cache/bind
     # No `networks:` on purpose: the implicit default bridge has egress for the forwarders, and
     # compose.host-network.yaml can switch to host networking without conflicts.
     healthcheck:
-      # The image has no dig; check that named accepts TCP on its DNS port (5053, or 53 in overrides).
-      test: ["CMD", "bash", "-c", "(exec 3<>/dev/tcp/127.0.0.1/5053) 2>/dev/null || exec 3<>/dev/tcp/127.0.0.1/53"]
+      # No shell or dig in the image: ask named itself over the loopback control channel.
+      test: ["CMD", "/usr/sbin/rndc", "-c", "/etc/bind/rndc.conf", "status"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -55,15 +58,17 @@ services:
       resources:
         limits: { cpus: "${BIND_CPUS:-1.0}", memory: "${BIND_MEMORY:-512M}", pids: 200 }
 
-  # One-shot helper: seeds the zone file on first start and hands the data volumes to `bind`.
+  # One-shot helper: seeds the zone file on first start and hands the data volumes to `bind`
+  # (9970). Uses Alpine because the bind9 image has no shell.
   init-zones:
     <<: *hardening
-    image: docker.io/ubuntu/bind9:9.20-26.04_edge
+    image: docker.io/library/alpine:3.24.2
     restart: "no"
+    user: "0:0"
     entrypoint:
       - sh
       - -c
-      - "[ -f /var/lib/bind/db.primary.zone ] || cp /seed/db.primary.zone /var/lib/bind/db.primary.zone; chown -R bind:bind /var/lib/bind /var/cache/bind"
+      - "[ -f /var/lib/bind/db.primary.zone ] || cp /seed/db.primary.zone /var/lib/bind/db.primary.zone; chown -R 9970:9970 /var/lib/bind /var/cache/bind"
     # CHOWN: hand the volumes to `bind`. DAC_OVERRIDE: seed into a dir already owned by `bind`.
     cap_add: [CHOWN, DAC_OVERRIDE]
     network_mode: none
@@ -78,6 +83,8 @@ services:
 secrets:
   bind_tsig_key:
     file: ./secrets/bind_tsig_key
+  bind_rndc_key:
+    file: ./secrets/bind_rndc_key
 
 volumes:
   bind9-zones:
