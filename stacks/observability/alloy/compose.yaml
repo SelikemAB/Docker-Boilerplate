@@ -63,6 +63,7 @@ services:
       - /rootfs/run
     depends_on:
       socket-proxy: { condition: service_healthy }
+      init-perms: { condition: service_completed_successfully }
     command:
       - run
       - /etc/alloy/alloy.d/
@@ -108,6 +109,23 @@ services:
     deploy:
       resources:
         limits: { cpus: "${ALLOY_CPUS:-1.0}", memory: "${ALLOY_MEMORY:-1G}", pids: 300 }
+
+  # One-shot helper: hand the data volume to root. Alloy runs as root but without DAC_OVERRIDE,
+  # so it cannot write into the image's alloy-owned (UID 473) storage directory.
+  init-perms:
+    image: docker.io/grafana/alloy:v1.19.2
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["sh", "-c", "chown -R 0:0 /var/lib/alloy/data && chmod 700 /var/lib/alloy/data"]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]  # only to take ownership of the volume
+    network_mode: none
+    volumes: [alloy-data:/var/lib/alloy/data]
+    logging: *logging
+    deploy:
+      resources:
+        limits: { cpus: "0.1", memory: 32M, pids: 20 }
 
 volumes:
   alloy-data:

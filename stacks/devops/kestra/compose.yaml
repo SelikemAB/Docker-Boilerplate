@@ -192,7 +192,7 @@ services:
     entrypoint: ["sh", "-c", "chown 1000:1000 /app/storage /tmp/kestra-wd /sock && chmod 750 /sock"]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
-    cap_add: [CHOWN]  # needed only to chown the volume roots
+    cap_add: [CHOWN, FOWNER]  # chown the volume roots, then chmod the socket dir we no longer own
     network_mode: none
     volumes:
       - kestra-data:/app/storage

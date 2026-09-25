@@ -88,7 +88,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 180s  # first start runs all DB migrations
+      start_period: 600s  # first start runs all DB migrations (several minutes on small hosts)
     deploy:
       resources:
         limits: { cpus: "${NETBOX_CPUS:-2.0}", memory: "${NETBOX_MEMORY:-2G}", pids: 512 }
