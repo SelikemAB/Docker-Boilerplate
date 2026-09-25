@@ -1,0 +1,52 @@
+# Loki single-binary configuration. Values like ${VAR:-default} are expanded at start-up
+# (-config.expand-env=true) from the environment set in compose.yaml / .env.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  log_level: info
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+# retention_period is only enforced when the compactor has retention enabled.
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  retention_delete_delay: 2h
+  delete_request_store: filesystem
+
+limits_config:
+  retention_period: ${LOKI_RETENTION_PERIOD:-168h}
+  ingestion_rate_mb: ${LOKI_INGESTION_RATE_MB:-4}
+  ingestion_burst_size_mb: ${LOKI_INGESTION_BURST_MB:-6}
+  max_streams_per_user: 10000
+  max_line_size: 256000
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+
+ruler:
+  alertmanager_url: http://localhost:9093
+
+# Do not send usage statistics to Grafana Labs.
+analytics:
+  reporting_enabled: false

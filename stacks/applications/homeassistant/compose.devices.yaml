@@ -1,0 +1,17 @@
+# Home Assistant — USB/serial device passthrough (opt-in override)
+#   docker compose -f compose.yaml -f compose.devices.yaml up -d
+#   docker compose -f compose.host-network.yaml -f compose.devices.yaml up -d
+# Maps only the named device nodes into the container instead of running privileged.
+# Use stable paths from /dev/serial/by-id/ on the host so re-plugging doesn't change the name.
+services:
+  homeassistant:
+    devices:
+      # Zigbee / Z-Wave / Thread coordinator (e.g. SkyConnect, ConBee, Sonoff, Aeotec)
+      - "${HA_SERIAL_DEVICE:-/dev/ttyACM0}:/dev/ttyACM0"
+      # Add more as needed, e.g. a second radio:
+      # - "${HA_SERIAL_DEVICE_2:-/dev/ttyUSB0}:/dev/ttyUSB0"
+    # Optional: allow re-enumerated USB-serial devices (major 188 = ttyUSB, 166 = ttyACM)
+    # without a container restart. Still far narrower than privileged mode.
+    # device_cgroup_rules:
+    #   - "c 166:* rmw"
+    #   - "c 188:* rmw"

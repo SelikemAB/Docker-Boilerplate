@@ -1,0 +1,173 @@
+# Dockhand — hardened Docker management UI
+# Docs: https://dockhand.pro/manual/
+# - No Docker socket in the app: connects to a filtered socket proxy over TCP (Direct environment)
+# - PostgreSQL backend on an internal network; non-root app and DB; secrets from files
+# - Published only through Traefik, restricted to internal networks
+# WARNING: whoever can log in to Dockhand effectively has root on this host. See README.
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  socket-proxy:
+    <<: *hardening
+    image: docker.io/tecnativa/docker-socket-proxy:v0.5.0
+    container_name: dockhand-socket-proxy
+    read_only: true
+    tmpfs: [/tmp, /run]
+    environment:
+      # Endpoints from Dockhand's socket-proxy guide (+ EXEC for terminal/file browser,
+      # BUILD/DISTRIBUTION for compose builds and pulls). Swarm, secrets, plugins, /auth blocked.
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      EXEC: 1
+      BUILD: 1
+      DISTRIBUTION: 1
+      INFO: 1
+      SYSTEM: 1
+      EVENTS: 1
+      VERSION: 1
+      PING: 1
+      ALLOW_START: 1
+      ALLOW_STOP: 1
+      ALLOW_RESTARTS: 1
+      POST: 1
+      AUTH: 0
+      SECRETS: 0
+      SWARM: 0
+      NODES: 0
+      SERVICES: 0
+      TASKS: 0
+      CONFIGS: 0
+      PLUGINS: 0
+      SESSION: 0
+      COMMIT: 0
+      LOG_LEVEL: warning
+    volumes:
+      # HARDENING-EXCEPTION: docker socket — Dockhand is a container manager and needs write access to the Docker API (POST=1). Mounted only into this filtered proxy on an internal network, never into the web app.
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
+    networks: [socket]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:2375/_ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    pids_limit: 100
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
+
+  postgres:
+    <<: *hardening
+    image: docker.io/library/postgres:18.6-alpine
+    container_name: dockhand-postgres
+    user: "70:70"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    shm_size: 128m
+    environment:
+      TZ: ${TZ:-UTC}
+      POSTGRES_USER: ${DOCKHAND_DB_USER:-dockhand}
+      POSTGRES_DB: ${DOCKHAND_DB_NAME:-dockhand}
+      POSTGRES_PASSWORD_FILE: /run/secrets/dockhand_db_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256 --data-checksums"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    secrets: [dockhand_db_password]
+    volumes:
+      - dockhand-postgres:/var/lib/postgresql
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    pids_limit: 200
+    deploy:
+      resources:
+        limits: { cpus: "${DOCKHAND_DB_CPUS:-1.0}", memory: "${DOCKHAND_DB_MEMORY:-1G}" }
+
+  dockhand:
+    <<: *hardening
+    image: docker.io/fnsys/dockhand:v1.0.49
+    container_name: ${CONTAINER_NAME:-dockhand}
+    # Image's dockhand user. Starting non-root makes the entrypoint skip all user/chown logic.
+    user: "1001:1001"
+    depends_on:
+      postgres: { condition: service_healthy }
+      socket-proxy: { condition: service_healthy }
+    # Dockhand has no *_FILE support: build DATABASE_URL / ENCRYPTION_KEY from Docker secrets
+    # at start-up so they never appear in the container config (docker inspect).
+    entrypoint:
+      - /sbin/tini
+      - --
+      - /bin/sh
+      - -c
+      - |
+        DB_PASSWORD="$$(cat /run/secrets/dockhand_db_password)"
+        ENCRYPTION_KEY="$$(cat /run/secrets/dockhand_encryption_key)"
+        DATABASE_URL="postgres://$${DOCKHAND_DB_USER}:$${DB_PASSWORD}@postgres:5432/$${DOCKHAND_DB_NAME}"
+        export ENCRYPTION_KEY DATABASE_URL
+        unset DB_PASSWORD
+        exec /usr/local/bin/docker-entrypoint.sh
+    environment:
+      TZ: ${TZ:-UTC}
+      DOCKHAND_DB_USER: ${DOCKHAND_DB_USER:-dockhand}
+      DOCKHAND_DB_NAME: ${DOCKHAND_DB_NAME:-dockhand}
+      DISABLE_LOCAL_LOGIN: ${DOCKHAND_DISABLE_LOCAL_LOGIN:-false}
+      # Host path of the dockhand-data volume; set when stacks use relative bind mounts.
+      HOST_DATA_DIR: ${DOCKHAND_HOST_DATA_DIR:-}
+    secrets: [dockhand_db_password, dockhand_encryption_key]
+    volumes:
+      - dockhand-data:/app/data
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      traefik.http.routers.dockhand.rule: Host(`${DOCKHAND_HOST}`)
+      traefik.http.routers.dockhand.entrypoints: websecure
+      traefik.http.routers.dockhand.middlewares: internal-only@file
+      traefik.http.services.dockhand.loadbalancer.server.port: "3000"
+    # proxy: Traefik ingress + egress (Git, registries, OIDC); backend: DB; socket: Docker API.
+    networks: [proxy, backend, socket]
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "-o", "/dev/null", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    pids_limit: 500
+    deploy:
+      resources:
+        limits: { cpus: "${DOCKHAND_CPUS:-1.0}", memory: "${DOCKHAND_MEMORY:-1G}" }
+
+secrets:
+  dockhand_db_password:
+    file: ./secrets/dockhand_db_password
+  dockhand_encryption_key:
+    file: ./secrets/dockhand_encryption_key
+
+volumes:
+  dockhand-data:
+  dockhand-postgres:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  backend:
+    internal: true
+  socket:
+    internal: true

@@ -1,0 +1,38 @@
+# traefik-addons: CrowdSec bouncer (opt-in).
+# Traefik only loads *.yaml/*.yml/*.toml, so this file is inert until renamed to
+# addons-crowdsec.yaml. It needs the plugin enabled in Traefik's static config first
+# (see README), otherwise every router that uses these middlewares fails.
+http:
+  middlewares:
+    crowdsec-bouncer:
+      plugin:
+        crowdsec-bouncer-traefik-plugin:
+          enabled: true
+          # live | stream | alone | appsec  (stream = periodic decision sync, lowest latency)
+          crowdsecMode: stream
+          crowdsecLapiScheme: http
+          crowdsecLapiHost: "crowdsec:8080"
+          # Bouncer key from `cscli bouncers add traefik`, mounted into Traefik as a secret.
+          crowdsecLapiKeyFile: /run/secrets/crowdsec_bouncer_key
+          # Proxies/load balancers in front of Traefik whose X-Forwarded-For is trusted.
+          forwardedHeadersTrustedIPs:
+            - 10.0.0.0/8
+            - 192.168.0.0/16
+          # AppSec (WAF) component of CrowdSec >= 1.6:
+          crowdsecAppsecEnabled: false
+          # crowdsecAppsecHost: "crowdsec:7422"
+          # crowdsecAppsecFailureBlock: true
+          # crowdsecAppsecUnreachableBlock: false
+
+    crowdsec-secured:
+      chain:
+        middlewares:
+          - crowdsec-bouncer
+          - rate-limit
+
+    crowdsec-sso-secured:
+      chain:
+        middlewares:
+          - crowdsec-bouncer
+          - rate-limit
+          - forward-auth

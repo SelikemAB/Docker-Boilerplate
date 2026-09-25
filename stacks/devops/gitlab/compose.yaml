@@ -1,0 +1,96 @@
+# GitLab CE — hardened Omnibus deployment behind Traefik
+# Docs: https://docs.gitlab.com/install/docker/
+# - All capabilities dropped; only the few Omnibus/runit/sshd need are added back
+# - Configuration in config/gitlab.rb (read-only), driven by .env; secrets read from Docker secrets
+# - HTTP via Traefik (TLS terminated there); Git SSH published directly
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  gitlab:
+    <<: *hardening
+    image: docker.io/gitlab/gitlab-ce:19.4.1-ce.0
+    container_name: ${CONTAINER_NAME:-gitlab}
+    hostname: ${GITLAB_HOST}
+    # Omnibus is a runit-supervised multi-process image that must start as root and
+    # switch to per-service users (git, gitlab-psql, gitlab-redis, ...), so no `user:`
+    # and no read-only root FS.
+    cap_add:
+      - CHOWN             # reconfigure fixes ownership of data/config directories
+      - DAC_OVERRIDE      # root manages files owned by the service users
+      - FOWNER            # chmod/utime on files owned by service users
+      - FSETID            # keep setgid bits on directories it creates
+      - SETUID            # runit/chpst drop to per-service users
+      - SETGID            # ditto
+      - KILL              # runit signals service processes running as other users
+      - NET_BIND_SERVICE  # nginx :80 and sshd :22 inside the container
+      - SYS_CHROOT        # sshd privilege separation
+      - AUDIT_WRITE       # sshd login records
+    shm_size: 256m
+    stop_grace_period: 2m
+    environment:
+      TZ: ${TZ:-UTC}
+      # Read by config/gitlab.rb (ENV[...]).
+      GITLAB_HOST: ${GITLAB_HOST}
+      GITLAB_SSH_PORT: ${GITLAB_SSH_PORT:-2424}
+      GITLAB_ROOT_EMAIL: ${GITLAB_ROOT_EMAIL:-admin@example.com}
+      GITLAB_TRUSTED_PROXIES: ${GITLAB_TRUSTED_PROXIES:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      GITLAB_PERFORMANCE_PRESET: ${GITLAB_PERFORMANCE_PRESET:-homelab}
+      GITLAB_PROMETHEUS_ENABLED: ${GITLAB_PROMETHEUS_ENABLED:-false}
+      GITLAB_DEFAULT_THEME: ${GITLAB_DEFAULT_THEME:-2}
+      GITLAB_DEFAULT_COLOR_MODE: ${GITLAB_DEFAULT_COLOR_MODE:-2}
+      GITLAB_PRODUCT_USAGE_DATA: ${GITLAB_PRODUCT_USAGE_DATA:-false}
+      GITLAB_REGISTRY_ENABLED: "false"
+      GITLAB_SMTP_ENABLED: "false"
+      GITLAB_OIDC_ENABLED: "false"
+    secrets: [gitlab_root_password]
+    ports:
+      # HARDENING-EXCEPTION: port — Git over SSH must be reachable by clients, so it binds all interfaces by default.
+      - "${SSH_BIND_ADDRESS:-0.0.0.0}:${GITLAB_SSH_PORT:-2424}:22"
+    volumes:
+      - ./config/gitlab.rb:/etc/gitlab/gitlab.rb:ro
+      - gitlab-config:/etc/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-data:/var/opt/gitlab
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      traefik.http.routers.gitlab.rule: Host(`${GITLAB_HOST}`)
+      traefik.http.routers.gitlab.entrypoints: websecure
+      traefik.http.routers.gitlab.service: gitlab
+      traefik.http.services.gitlab.loadbalancer.server.port: "80"
+    networks: [proxy]
+    healthcheck:
+      # Same probe as the upstream image's HEALTHCHECK.
+      test: ["CMD", "/opt/gitlab/bin/gitlab-healthcheck", "--fail", "--max-time", "10"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+      start_period: 10m
+    # Puma, Sidekiq, Gitaly, PostgreSQL and Redis together use many threads.
+    pids_limit: 4096
+    deploy:
+      resources:
+        limits: { cpus: "${GITLAB_CPUS:-4.0}", memory: "${GITLAB_MEMORY:-8G}" }
+
+secrets:
+  gitlab_root_password:
+    file: ./secrets/gitlab_root_password
+
+volumes:
+  gitlab-config:
+  gitlab-logs:
+  gitlab-data:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

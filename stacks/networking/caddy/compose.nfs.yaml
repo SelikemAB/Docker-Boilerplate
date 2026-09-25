@@ -1,0 +1,14 @@
+# Optional: serve the static site from an NFS export instead of a bind mount.
+# Usage: docker compose -f compose.yaml -f compose.nfs.yaml up -d
+services:
+  caddy:
+    volumes:
+      - caddy-site:/srv:ro
+
+volumes:
+  caddy-site:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: "addr=${NFS_SERVER:-192.0.2.1},nfsvers=4,${NFS_OPTIONS:-ro,nolock,soft}"
+      device: ":${NFS_PATH:-/path/to/export}"

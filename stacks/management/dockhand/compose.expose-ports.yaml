@@ -1,0 +1,7 @@
+# Optional: publish the Dockhand UI directly (without Traefik), loopback-only by default.
+# Usage: docker compose -f compose.yaml -f compose.expose-ports.yaml up -d
+# Plain HTTP: reach it through an SSH tunnel rather than binding a public address.
+services:
+  dockhand:
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${DOCKHAND_PORT:-3000}:3000"

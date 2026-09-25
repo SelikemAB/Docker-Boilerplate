@@ -1,0 +1,17 @@
+// Destinations. URLs come from the container environment (see .env / compose.yaml).
+loki.write "default" {
+  endpoint {
+    url = sys.env("LOKI_URL")
+
+    // Batching reduces request volume and prevents rate limiting.
+    batch_wait = "5s"
+    batch_size = "1MiB"
+  }
+  external_labels = {}
+}
+
+prometheus.remote_write "default" {
+  endpoint {
+    url = sys.env("PROMETHEUS_REMOTE_WRITE_URL")
+  }
+}

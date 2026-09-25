@@ -1,0 +1,7 @@
+# Optional: publish the Komodo UI/API directly (without Traefik), loopback-only by default.
+# Usage: docker compose -f compose.yaml -f compose.expose-ports.yaml up -d
+# Plain HTTP: reach it through an SSH tunnel rather than binding a public address.
+services:
+  komodo:
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${KOMODO_PORT:-9120}:9120"

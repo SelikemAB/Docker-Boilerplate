@@ -1,0 +1,9 @@
+# Optional: publish the Arcane UI directly (without Traefik), loopback-only by default.
+# Usage: docker compose -f compose.yaml -f compose.expose-ports.yaml up -d
+# Reach it via an SSH tunnel; traffic on this port is plain HTTP.
+services:
+  arcane:
+    environment:
+      APP_URL: http://localhost:${ARCANE_PORT:-3552}
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${ARCANE_PORT:-3552}:3552"

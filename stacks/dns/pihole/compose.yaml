@@ -1,0 +1,91 @@
+# Pi-hole — hardened network-wide DNS sinkhole
+# Docs: https://github.com/pi-hole/docker-pi-hole
+# - Starts as root (image entrypoint needs it) with all capabilities dropped except a minimal set;
+#   pihole-FTL itself runs as the unprivileged `pihole` user
+# - Admin password from a Docker secret (WEBPASSWORD_FILE), web UI only via Traefik
+# - Clock sync disabled (no SYS_TIME), DHCP only in the host-network variant
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  pihole:
+    <<: *hardening
+    image: docker.io/pihole/pihole:2026.09.0
+    container_name: ${CONTAINER_NAME:-pihole}
+    hostname: ${PIHOLE_HOSTNAME:-pihole}
+    # No `user:`: start.sh must run as root (usermod, setcap, crond) before it launches
+    # pihole-FTL as `pihole` via capsh. Everything except the capabilities below is dropped.
+    cap_add:
+      - CHOWN             # start.sh / prestart: chown /etc/pihole, /var/log/pihole, macvendor.db
+      - DAC_OVERRIDE      # root edits pihole-owned files (pihole-FTL --config, gravity)
+      - FOWNER            # prestart: chmod pihole-owned files
+      - SETUID            # capsh --user=pihole, cron jobs
+      - SETGID
+      - SETFCAP           # start.sh sets file capabilities on pihole-FTL and aborts if it can't
+      - KILL              # signal pihole-FTL (owned by pihole) on container stop
+      - NET_BIND_SERVICE  # handed to pihole-FTL: DNS 53, NTP 123 and web 80 inside the container
+    environment:
+      TZ: ${TZ:-UTC}
+      PIHOLE_UID: ${PIHOLE_UID:-1000}
+      PIHOLE_GID: ${PIHOLE_GID:-1000}
+      # File name below /run/secrets (Pi-hole's convention, not a full path).
+      WEBPASSWORD_FILE: pihole_webpassword
+      # Answer queries arriving via the Docker bridge (clients appear from non-local subnets).
+      FTLCONF_dns_listeningMode: all
+      FTLCONF_dns_upstreams: ${PIHOLE_DNS_UPSTREAMS:-9.9.9.9;149.112.112.112}
+      # Plain HTTP only; TLS is terminated by Traefik (no self-signed 443 listener).
+      FTLCONF_webserver_port: "80o,[::]:80o"
+      # Never try to set the (host's) clock; the NTP *server* on 123/udp stays enabled.
+      FTLCONF_ntp_sync_active: "false"
+    ports:
+      # HARDENING-EXCEPTION: port — a network DNS/NTP server must answer on all interfaces by default.
+      - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DNS_PORT:-53}:53/tcp"
+      - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DNS_PORT:-53}:53/udp"
+      - "${DNS_BIND_ADDRESS:-0.0.0.0}:${NTP_PORT:-123}:123/udp"
+    secrets: [pihole_webpassword]
+    volumes:
+      - pihole-etc:/etc/pihole
+      - pihole-dnsmasq:/etc/dnsmasq.d
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.pihole.rule: Host(`${PIHOLE_HOST}`)
+      traefik.http.routers.pihole.entrypoints: websecure
+      traefik.http.routers.pihole.middlewares: internal-only@file
+      traefik.http.services.pihole.loadbalancer.server.port: "80"
+    networks:
+      proxy: {}
+      dns: {}
+    healthcheck:
+      # Same probe as the upstream image's HEALTHCHECK.
+      test: ["CMD-SHELL", "dig -p $$(pihole-FTL --config dns.port) +short +norecurse +retry=0 @127.0.0.1 pi.hole || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${PIHOLE_CPUS:-1.0}", memory: "${PIHOLE_MEMORY:-512M}" }
+
+secrets:
+  pihole_webpassword:
+    file: ./secrets/pihole_webpassword
+
+volumes:
+  pihole-etc:
+  pihole-dnsmasq:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  # Stack-local bridge with egress: upstream resolvers and blocklist downloads.
+  dns:

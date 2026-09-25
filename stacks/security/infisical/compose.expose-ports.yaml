@@ -1,0 +1,8 @@
+# Optional: direct access without Traefik. Binds to loopback by default.
+# Usage: docker compose -f compose.yaml -f compose.expose-ports.yaml up -d
+# Remember to set INFISICAL_HOST (SITE_URL) to the URL you actually use.
+
+services:
+  infisical:
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${INFISICAL_PORT:-8080}:8080"

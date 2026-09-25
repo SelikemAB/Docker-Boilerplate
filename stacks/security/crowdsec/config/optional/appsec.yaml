@@ -1,0 +1,10 @@
+# AppSec (WAF) listener for the Traefik bouncer plugin. Copy to config/acquis.d/ to enable, and add
+# "crowdsecurity/appsec-virtual-patching crowdsecurity/appsec-generic-rules" to CROWDSEC_COLLECTIONS.
+# Traefik reaches it on the proxy network as http://crowdsec:7422.
+source: appsec
+listen_addr: 0.0.0.0:7422
+path: /
+appsec_config: crowdsecurity/appsec-default
+labels:
+  type: appsec
+name: traefik-appsec

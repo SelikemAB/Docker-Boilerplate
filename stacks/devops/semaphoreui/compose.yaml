@@ -1,0 +1,122 @@
+# Semaphore UI — hardened web UI for Ansible, Terraform/OpenTofu and scripts
+# Docs: https://docs.semaphoreui.com/administration-guide/installation/docker/
+# - Non-root (UID 1001), no capabilities
+# - PostgreSQL on an internal network; credentials via *_FILE Docker secrets
+# - UI through Traefik, restricted to internal networks
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  semaphore:
+    <<: *hardening
+    image: docker.io/semaphoreui/semaphore:v2.19.14
+    container_name: ${CONTAINER_NAME:-semaphoreui}
+    # Image user; root FS stays writable because playbook runs install Ansible
+    # collections/roles and Python requirements at runtime.
+    user: "1001:0"
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      TZ: ${TZ:-UTC}
+      SEMAPHORE_DB_DIALECT: postgres
+      SEMAPHORE_DB_HOST: postgres
+      SEMAPHORE_DB_PORT: "5432"
+      SEMAPHORE_DB: ${SEMAPHORE_DB_NAME:-semaphore}
+      SEMAPHORE_DB_USER: ${SEMAPHORE_DB_USER:-semaphore}
+      SEMAPHORE_DB_PASS_FILE: /run/secrets/semaphore_db_password
+      SEMAPHORE_DB_OPTIONS: '{"sslmode":"disable"}'
+      # Initial admin (created on first start only)
+      SEMAPHORE_ADMIN: ${SEMAPHORE_ADMIN:-admin}
+      SEMAPHORE_ADMIN_NAME: ${SEMAPHORE_ADMIN_NAME:-Administrator}
+      SEMAPHORE_ADMIN_EMAIL: ${SEMAPHORE_ADMIN_EMAIL:-admin@example.com}
+      SEMAPHORE_ADMIN_PASSWORD_FILE: /run/secrets/semaphore_admin_password
+      # Encrypts stored access keys (SSH keys, passwords, tokens) in the database
+      SEMAPHORE_ACCESS_KEY_ENCRYPTION_FILE: /run/secrets/semaphore_access_key_encryption
+      SEMAPHORE_WEB_ROOT: https://${SEMAPHORE_HOST}
+      SEMAPHORE_PLAYBOOK_PATH: /tmp/semaphore/
+      ANSIBLE_HOST_KEY_CHECKING: ${ANSIBLE_HOST_KEY_CHECKING:-True}
+    secrets: [semaphore_db_password, semaphore_admin_password, semaphore_access_key_encryption]
+    volumes:
+      # config.json generated on first start (contains DB credentials: sensitive)
+      - semaphore-config:/etc/semaphore
+      - semaphore-data:/var/lib/semaphore
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      traefik.http.routers.semaphore.rule: Host(`${SEMAPHORE_HOST}`)
+      traefik.http.routers.semaphore.entrypoints: websecure
+      traefik.http.routers.semaphore.middlewares: internal-only@file
+      traefik.http.services.semaphore.loadbalancer.server.port: "3000"
+    # proxy network also provides egress to managed hosts, Git and Galaxy.
+    networks: [proxy, backend]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    pids_limit: 1000
+    deploy:
+      resources:
+        limits: { cpus: "${SEMAPHORE_CPUS:-2.0}", memory: "${SEMAPHORE_MEMORY:-2G}" }
+
+  postgres:
+    <<: *hardening
+    image: docker.io/library/postgres:18.6-alpine
+    container_name: ${CONTAINER_NAME:-semaphoreui}-postgres
+    user: "70:70"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    shm_size: 128m
+    environment:
+      TZ: ${TZ:-UTC}
+      POSTGRES_USER: ${SEMAPHORE_DB_USER:-semaphore}
+      POSTGRES_DB: ${SEMAPHORE_DB_NAME:-semaphore}
+      POSTGRES_PASSWORD_FILE: /run/secrets/semaphore_db_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256 --data-checksums"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    secrets: [semaphore_db_password]
+    volumes:
+      - semaphore-postgres:/var/lib/postgresql
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    pids_limit: 200
+    deploy:
+      resources:
+        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-1G}" }
+
+secrets:
+  semaphore_db_password:
+    file: ./secrets/semaphore_db_password
+  semaphore_admin_password:
+    file: ./secrets/semaphore_admin_password
+  semaphore_access_key_encryption:
+    file: ./secrets/semaphore_access_key_encryption
+
+volumes:
+  semaphore-config:
+  semaphore-data:
+  semaphore-postgres:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  backend:
+    internal: true

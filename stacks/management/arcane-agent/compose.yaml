@@ -1,0 +1,117 @@
+# Arcane Agent — hardened remote Docker host agent for an Arcane manager
+# Docs: https://getarcane.app/docs
+# - Default: edge mode (outbound-only to the manager, no published port)
+# - Talks to Docker through a filtered socket proxy (DOCKER_HOST=tcp://...), never the raw socket
+# - Runs as non-root (65532) with a read-only root FS; agent token via AGENT_TOKEN_FILE
+# WARNING: the manager (and anyone holding the agent token) effectively has root on this host.
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  socket-proxy:
+    <<: *hardening
+    image: docker.io/tecnativa/docker-socket-proxy:v0.5.0
+    container_name: arcane-agent-socket-proxy
+    read_only: true
+    tmpfs: [/tmp, /run]
+    environment:
+      # Same endpoint set as the Arcane manager: full container management,
+      # but no swarm, secrets, plugins, configs, commit or /auth.
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      EXEC: 1
+      BUILD: 1
+      DISTRIBUTION: 1
+      INFO: 1
+      SYSTEM: 1
+      EVENTS: 1
+      VERSION: 1
+      PING: 1
+      ALLOW_START: 1
+      ALLOW_STOP: 1
+      ALLOW_RESTARTS: 1
+      POST: 1
+      AUTH: 0
+      SECRETS: 0
+      SWARM: 0
+      NODES: 0
+      SERVICES: 0
+      TASKS: 0
+      CONFIGS: 0
+      PLUGINS: 0
+      SESSION: 0
+      COMMIT: 0
+      LOG_LEVEL: warning
+    volumes:
+      # HARDENING-EXCEPTION: docker socket — the agent executes the manager's container-management requests and needs write access to the Docker API (POST=1). Mounted only into this filtered proxy on an internal network.
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
+    networks: [socket]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:2375/_ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    pids_limit: 100
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
+
+  arcane-agent:
+    <<: *hardening
+    image: ghcr.io/getarcaneapp/agent:v2.13.1
+    container_name: ${CONTAINER_NAME:-arcane-agent}
+    # Image default runtime user; starting directly as it skips the root->PUID re-exec.
+    user: "65532:65532"
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      socket-proxy: { condition: service_healthy }
+    environment:
+      TZ: ${TZ:-UTC}
+      # Edge mode: the agent dials out to the manager; nothing listens on the host.
+      EDGE_AGENT: "true"
+      EDGE_TRANSPORT: ${ARCANE_EDGE_TRANSPORT:-poll}
+      MANAGER_API_URL: ${ARCANE_MANAGER_API_URL}
+      AGENT_TOKEN_FILE: /run/secrets/arcane_agent_token
+      DOCKER_HOST: tcp://socket-proxy:2375
+      PROJECTS_DIRECTORY: ${ARCANE_PROJECTS_DIRECTORY:-/app/data/projects}
+      LOG_LEVEL: ${ARCANE_LOG_LEVEL:-info}
+      LOG_JSON: "true"
+    secrets: [arcane_agent_token]
+    volumes:
+      - arcane-agent-data:/app/data
+    # egress: outbound connection to the manager; socket: Docker API.
+    networks: [egress, socket]
+    healthcheck:
+      test: ["CMD", "/app/arcane-agent", "health", "--timeout", "2s"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${ARCANE_AGENT_CPUS:-0.5}", memory: "${ARCANE_AGENT_MEMORY:-512M}" }
+
+secrets:
+  arcane_agent_token:
+    file: ./secrets/arcane_agent_token
+
+volumes:
+  arcane-agent-data:
+
+networks:
+  egress: {}
+  socket:
+    internal: true

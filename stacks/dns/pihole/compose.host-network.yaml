@@ -1,0 +1,67 @@
+# Optional ALTERNATIVE to compose.yaml (STANDALONE file): Pi-hole on the host network (needed for its DHCP server).
+# Use this file ON ITS OWN, not as an overlay:
+#   docker compose -f compose.host-network.yaml up -d
+# (Compose cannot remove the `networks:`/`ports:` of compose.yaml from an overlay without the
+# `!reset` tag, so this is a standalone file. It reuses the same volumes and secret.)
+# No Traefik route: the web UI listens on PIHOLE_HOST_WEBSERVER_PORT (loopback by default, so it
+# doesn't collide with Traefik on :80). Reach it via an SSH tunnel or a management IP.
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  pihole:
+    <<: *hardening
+    image: docker.io/pihole/pihole:2026.09.0
+    container_name: ${CONTAINER_NAME:-pihole}
+    # HARDENING-EXCEPTION: host network — DHCP needs broadcast on the LAN and DNS must see real client IPs.
+    network_mode: host
+    cap_add:
+      - CHOWN             # start.sh / prestart: chown /etc/pihole, /var/log/pihole, macvendor.db
+      - DAC_OVERRIDE      # root edits pihole-owned files (pihole-FTL --config, gravity)
+      - FOWNER            # prestart: chmod pihole-owned files
+      - SETUID            # capsh --user=pihole, cron jobs
+      - SETGID
+      - SETFCAP           # start.sh sets file capabilities on pihole-FTL and aborts if it can't
+      - KILL              # signal pihole-FTL (owned by pihole) on container stop
+      - NET_BIND_SERVICE  # DNS 53, DHCP 67, NTP 123 in the host namespace
+      - NET_RAW           # DHCP server
+      - NET_ADMIN         # DHCP server (required by Pi-hole for DHCP)
+    environment:
+      TZ: ${TZ:-UTC}
+      PIHOLE_UID: ${PIHOLE_UID:-1000}
+      PIHOLE_GID: ${PIHOLE_GID:-1000}
+      WEBPASSWORD_FILE: pihole_webpassword
+      FTLCONF_dns_listeningMode: ${PIHOLE_HOST_LISTENING_MODE:-local}
+      FTLCONF_dns_upstreams: ${PIHOLE_DNS_UPSTREAMS:-9.9.9.9;149.112.112.112}
+      FTLCONF_webserver_port: ${PIHOLE_HOST_WEBSERVER_PORT:-127.0.0.1:8081o}
+      FTLCONF_ntp_sync_active: "false"
+    secrets: [pihole_webpassword]
+    volumes:
+      - pihole-etc:/etc/pihole
+      - pihole-dnsmasq:/etc/dnsmasq.d
+    healthcheck:
+      test: ["CMD-SHELL", "dig -p $$(pihole-FTL --config dns.port) +short +norecurse +retry=0 @127.0.0.1 pi.hole || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${PIHOLE_CPUS:-1.0}", memory: "${PIHOLE_MEMORY:-512M}" }
+
+secrets:
+  pihole_webpassword:
+    file: ./secrets/pihole_webpassword
+
+volumes:
+  pihole-etc:
+  pihole-dnsmasq:

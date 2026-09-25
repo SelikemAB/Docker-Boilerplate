@@ -1,0 +1,7 @@
+# Optional: publish the Loki API directly (e.g. for agents on other hosts without Traefik).
+# Usage: docker compose -f compose.yaml -f compose.expose-ports.yaml up -d
+# Loki runs with auth_enabled: false. Keep BIND_ADDRESS on a trusted interface.
+services:
+  loki:
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${LOKI_PORT:-3100}:3100"

@@ -1,0 +1,115 @@
+# Technitium DNS Server — hardened authoritative + recursive DNS server with web console
+# Docs: https://github.com/TechnitiumSoftware/DnsServer/blob/master/DockerEnvironmentVariables.md
+# - Runs as the non-root .NET `app` user (UID 1654), no capabilities, read-only root FS
+# - Admin password from a Docker secret (DNS_SERVER_ADMIN_PASSWORD_FILE)
+# - Web console and DNS-over-HTTPS (/dns-query) through Traefik; DNS on 53 via a namespaced sysctl
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  technitium:
+    <<: *hardening
+    image: docker.io/technitium/dns-server:15.5.0
+    container_name: ${CONTAINER_NAME:-technitium}
+    hostname: ${TECHNITIUM_HOSTNAME:-technitium}
+    user: "${TECHNITIUM_UID:-1654}:${TECHNITIUM_GID:-1654}"
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      init-perms: { condition: service_completed_successfully }
+    sysctls:
+      # DNS port 53 is not configurable via environment; allow the non-root process to bind
+      # ports >= 53 inside its own network namespace instead of granting NET_BIND_SERVICE.
+      net.ipv4.ip_unprivileged_port_start: "53"
+      # Wider source-port range for outgoing queries (upstream recommendation).
+      net.ipv4.ip_local_port_range: "1024 65535"
+    environment:
+      TZ: ${TZ:-UTC}
+      # .NET may cache data under $HOME; point it at the tmpfs (root FS is read-only).
+      HOME: /tmp
+      DNS_SERVER_DOMAIN: ${TECHNITIUM_DOMAIN:-dns-server}
+      # Read once, on first start. If the file is unreadable Technitium falls back to admin/admin!
+      DNS_SERVER_ADMIN_PASSWORD_FILE: /run/secrets/technitium_admin_password
+      DNS_SERVER_LOG_FOLDER_PATH: /var/log/technitium/dns
+      DNS_SERVER_LOG_USING_LOCAL_TIME: ${TECHNITIUM_LOG_LOCAL_TIME:-true}
+      DNS_SERVER_RECURSION: ${TECHNITIUM_RECURSION:-AllowOnlyForPrivateNetworks}
+      DNS_SERVER_FORWARDERS: ${TECHNITIUM_FORWARDERS:-1.1.1.1,9.9.9.9}
+      DNS_SERVER_FORWARDER_PROTOCOL: ${TECHNITIUM_FORWARDER_PROTOCOL:-Udp}
+      DNS_SERVER_ENABLE_BLOCKING: ${TECHNITIUM_ENABLE_BLOCKING:-false}
+      # Plain-HTTP DoH listener on :80 for the TLS-terminating proxy (Traefik -> /dns-query).
+      DNS_SERVER_OPTIONAL_PROTOCOL_DNS_OVER_HTTP: ${TECHNITIUM_DOH:-true}
+    ports:
+      # HARDENING-EXCEPTION: port — a network DNS server must answer on all interfaces by default.
+      - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DNS_PORT:-53}:53/tcp"
+      - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DNS_PORT:-53}:53/udp"
+    secrets: [technitium_admin_password]
+    volumes:
+      - technitium-config:/etc/dns
+      - technitium-logs:/var/log/technitium/dns
+    labels:
+      traefik.enable: "true"
+      # Web console / API
+      traefik.http.routers.technitium.rule: Host(`${TECHNITIUM_HOST}`)
+      traefik.http.routers.technitium.entrypoints: websecure
+      traefik.http.routers.technitium.middlewares: internal-only@file
+      traefik.http.routers.technitium.service: technitium
+      traefik.http.services.technitium.loadbalancer.server.port: "5380"
+      # DNS-over-HTTPS: TLS at Traefik, plain HTTP to Technitium's DoH listener
+      traefik.http.routers.technitium-doh.rule: Host(`${TECHNITIUM_HOST}`) && Path(`/dns-query`)
+      traefik.http.routers.technitium-doh.entrypoints: websecure
+      traefik.http.routers.technitium-doh.middlewares: internal-only@file
+      traefik.http.routers.technitium-doh.priority: "100"
+      traefik.http.routers.technitium-doh.service: technitium-doh
+      traefik.http.services.technitium-doh.loadbalancer.server.port: "80"
+    networks:
+      proxy: {}
+      dns: {}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:5380/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${TECHNITIUM_CPUS:-1.0}", memory: "${TECHNITIUM_MEMORY:-1G}" }
+
+  # One-shot helper: makes the data volumes writable by the non-root runtime user.
+  init-perms:
+    <<: *hardening
+    image: docker.io/technitium/dns-server:15.5.0
+    restart: "no"
+    entrypoint: ["sh", "-c", "chown -R ${TECHNITIUM_UID:-1654}:${TECHNITIUM_GID:-1654} /etc/dns /var/log/technitium/dns && chmod 700 /etc/dns"]
+    cap_add: [CHOWN, FOWNER]  # needed only to chown the data volumes
+    network_mode: none
+    volumes:
+      - technitium-config:/etc/dns
+      - technitium-logs:/var/log/technitium/dns
+    pids_limit: 20
+    deploy:
+      resources:
+        limits: { cpus: "0.1", memory: 32M }
+
+secrets:
+  technitium_admin_password:
+    file: ./secrets/technitium_admin_password
+
+volumes:
+  technitium-config:
+  technitium-logs:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  # Stack-local bridge with egress: forwarders/recursion and blocklist downloads.
+  dns:

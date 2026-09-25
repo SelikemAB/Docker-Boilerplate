@@ -1,0 +1,56 @@
+# Cloudflared — hardened Cloudflare Tunnel connector
+# Docs: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+# - Distroless image, runs as nonroot (65532), read-only root FS, no capabilities
+# - Outbound-only: publishes no ports
+# - Tunnel token read from a Docker secret (TUNNEL_TOKEN_FILE), never from the environment
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  cloudflared:
+    <<: *hardening
+    image: docker.io/cloudflare/cloudflared:2026.9.3
+    container_name: ${CONTAINER_NAME:-cloudflared}
+    user: "65532:65532"
+    read_only: true
+    tmpfs: [/tmp]
+    # The image entrypoint is `cloudflared --no-autoupdate`.
+    # Metrics/readiness stay on the container loopback (used by the healthcheck).
+    command: ["tunnel", "--metrics", "127.0.0.1:2000", "run"]
+    environment:
+      TZ: ${TZ:-UTC}
+      TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token
+      TUNNEL_LOGLEVEL: ${TUNNEL_LOGLEVEL:-info}
+      TUNNEL_TRANSPORT_PROTOCOL: ${TUNNEL_TRANSPORT_PROTOCOL:-auto}
+    secrets: [tunnel_token]
+    # Joins the shared proxy network so public hostnames can target
+    # https://traefik:8443 or other services by name.
+    networks: [proxy]
+    healthcheck:
+      # Built-in probe: exits 0 only when /ready reports an active edge connection.
+      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:2000", "ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    pids_limit: 100
+    deploy:
+      resources:
+        limits: { cpus: "${CLOUDFLARED_CPUS:-0.5}", memory: "${CLOUDFLARED_MEMORY:-256M}" }
+
+secrets:
+  tunnel_token:
+    file: ./secrets/tunnel_token
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

@@ -1,0 +1,57 @@
+# Homer — static dashboard served by lighttpd
+# Docs: https://github.com/bastienwirtz/homer
+# - Non-root (image user 1000), no capabilities, read-only root FS
+# - config.yml and custom assets are bind-mounted read-only; no first-run asset copy
+# - Reached only through Traefik, restricted to internal networks by default
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  homer:
+    <<: *hardening
+    image: docker.io/b4bz/homer:v26.08.3
+    container_name: ${CONTAINER_NAME:-homer}
+    user: "1000:1000"
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      TZ: ${TZ:-UTC}
+      PORT: "8080"
+      # The assets dir is read-only, so skip the first-run copy of default assets.
+      INIT_ASSETS: "0"
+      IPV6_DISABLE: ${HOMER_IPV6_DISABLE:-0}
+    volumes:
+      # Only config.yml and a custom asset folder are overlaid, so the image's built-in
+      # icons, PWA manifest and themes under /www/assets stay available.
+      - ./config/config.yml:/www/assets/config.yml:ro
+      - ./assets:/www/assets/custom:ro
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.homer.rule: Host(`${HOMER_HOST}`)
+      traefik.http.routers.homer.entrypoints: websecure
+      traefik.http.routers.homer.middlewares: ${HOMER_MIDDLEWARES:-internal-only@file}
+      traefik.http.services.homer.loadbalancer.server.port: "8080"
+    networks: [proxy]
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose -Y off --tries=1 --spider http://127.0.0.1:8080/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    pids_limit: 50
+    deploy:
+      resources:
+        limits: { cpus: "${HOMER_CPUS:-0.25}", memory: "${HOMER_MEMORY:-64M}" }
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

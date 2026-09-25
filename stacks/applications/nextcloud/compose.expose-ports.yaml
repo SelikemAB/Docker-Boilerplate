@@ -1,0 +1,8 @@
+# Optional: direct HTTP access without Traefik (testing only). Binds to loopback by default.
+# Usage: docker compose -f compose.yaml -f compose.expose-ports.yaml up -d
+# OVERWRITEPROTOCOL is https in the base file; put another TLS terminator in front.
+
+services:
+  app:
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${NEXTCLOUD_HTTP_PORT:-8080}:80"

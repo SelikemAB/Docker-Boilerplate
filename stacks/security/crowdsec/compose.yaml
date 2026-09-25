@@ -1,0 +1,68 @@
+# CrowdSec — hardened security engine (log analysis + Local API for bouncers)
+# Docs: https://docs.crowdsec.net/
+# - Reads host logs read-only; config and data persisted in named volumes
+# - Local API reachable by bouncers (e.g. the Traefik plugin) on the shared proxy network only
+# - Bouncer key via Docker secret (/run/secrets/bouncer_key_<name>), no published ports
+# - Docker log acquisition is opt-in via a read-only socket proxy (compose.docker-logs.yaml)
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  crowdsec:
+    <<: *hardening
+    image: docker.io/crowdsecurity/crowdsec:v1.8.1
+    container_name: crowdsec
+    # The entrypoint populates /etc/crowdsec, registers the agent and installs hub items as root.
+    # No user: override; all capabilities are dropped except the one below.
+    cap_add:
+      - DAC_READ_SEARCH  # read host logs not owned by root (e.g. /var/log/syslog is syslog:adm 0640)
+    environment:
+      TZ: ${TZ:-UTC}
+      COLLECTIONS: ${CROWDSEC_COLLECTIONS:-crowdsecurity/linux crowdsecurity/sshd crowdsecurity/traefik}
+      # Console enrollment (optional, one-time). The entrypoint has no *_FILE support for this.
+      ENROLL_KEY: ${CROWDSEC_ENROLL_KEY:-}
+      ENROLL_INSTANCE_NAME: ${CROWDSEC_ENROLL_INSTANCE_NAME:-crowdsec}
+      ENROLL_TAGS: ${CROWDSEC_ENROLL_TAGS:-}
+    # Registered as bouncer "traefik" by the entrypoint (reads /run/secrets/bouncer_key_*).
+    secrets: [bouncer_key_traefik]
+    volumes:
+      - crowdsec-config:/etc/crowdsec
+      - crowdsec-data:/var/lib/crowdsec/data
+      - ./config/acquis.yaml:/etc/crowdsec/acquis.yaml:ro
+      - ./config/acquis.d:/etc/crowdsec/acquis.d:ro
+      - ${HOST_LOG_DIR:-/var/log}:/var/log-host:ro
+    # crowdsec: egress for the Central API, hub and blocklists. proxy: bouncers reach LAPI (8080)
+    # and AppSec (7422) as http://crowdsec:<port>.
+    networks: [crowdsec, proxy]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${CROWDSEC_CPUS:-1.0}", memory: "${CROWDSEC_MEMORY:-1G}" }
+
+secrets:
+  bouncer_key_traefik:
+    file: ./secrets/bouncer_key_traefik
+
+volumes:
+  crowdsec-config:
+  crowdsec-data:
+
+networks:
+  crowdsec:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

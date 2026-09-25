@@ -1,0 +1,37 @@
+# Kestra server configuration (mounted read-only at /app/confs/config.yaml).
+# ${K_*} placeholders are resolved from the container environment at startup; the two
+# passwords are exported from Docker secrets by the compose entrypoint, never stored here.
+datasources:
+  postgres:
+    url: jdbc:postgresql://postgres:5432/${K_DB_NAME}
+    driver-class-name: org.postgresql.Driver
+    username: ${K_DB_USER}
+    password: ${K_DB_PASSWORD}
+
+kestra:
+  url: ${K_PUBLIC_URL}
+  server:
+    # Kestra 2.x: basic auth protects the UI/API. The username must be an e-mail address;
+    # the password needs 8+ characters with an upper-case letter and a digit.
+    # The default open-urls (/ping, execution webhooks) are kept.
+    basic-auth:
+      username: ${K_ADMIN_USER}
+      password: ${K_ADMIN_PASSWORD}
+  repository:
+    type: postgres
+  queue:
+    type: postgres
+  storage:
+    type: local
+    local:
+      base-path: /app/storage
+  tasks:
+    # Must be the same path on the host and in the container (the Docker task runner bind-mounts it).
+    tmp-dir:
+      path: /tmp/kestra-wd/tmp
+  tutorial-flows:
+    enabled: ${K_TUTORIAL_FLOWS:false}
+  anonymous-usage-report:
+    enabled: false
+  ui-anonymous-usage-report:
+    enabled: false

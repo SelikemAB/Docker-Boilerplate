@@ -1,0 +1,3 @@
+// Listener for compose.macvlan.yaml / compose.host-network.yaml: clients reach port 53 directly.
+listen-on port 53 { any; };
+listen-on-v6 port 53 { any; };

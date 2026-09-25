@@ -1,0 +1,91 @@
+# Optional: FerretDB (MongoDB-compatible, backed by PostgreSQL + DocumentDB) instead of MongoDB.
+# Usage: docker compose -f compose.yaml -f compose.ferretdb.yaml up -d
+# - Disables komodo-mongo (moved to the opt-in "mongo" profile) and points Core at FerretDB.
+# - FerretDB has no *_FILE support: KOMODO_DATABASE_PASSWORD must also be set in .env
+#   (same value as secrets/komodo_db_password; see README).
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  komodo:
+    # !override replaces Core's MongoDB dependency (Compose >= 2.24.4).
+    depends_on: !override
+      komodo-ferretdb: { condition: service_healthy }
+    environment:
+      KOMODO_DATABASE_ADDRESS: komodo-ferretdb:27017
+
+  komodo-mongo:
+    profiles: [mongo]
+
+  komodo-postgres:
+    <<: *hardening
+    image: ghcr.io/ferretdb/postgres-documentdb:17-0.107.0-ferretdb-2.7.0
+    container_name: komodo-postgres
+    # postgres user of the (Debian-based) official postgres image this is built on.
+    user: "999:999"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    shm_size: 128m
+    environment:
+      TZ: ${TZ:-UTC}
+      POSTGRES_USER: ${KOMODO_DATABASE_USERNAME:-komodo}
+      POSTGRES_PASSWORD_FILE: /run/secrets/komodo_db_password
+      POSTGRES_DB: postgres
+    secrets: [komodo_db_password]
+    labels:
+      komodo.skip: ""
+    volumes:
+      - komodo-postgres-data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    pids_limit: 200
+    deploy:
+      resources:
+        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-1G}" }
+
+  komodo-ferretdb:
+    <<: *hardening
+    image: ghcr.io/ferretdb/ferretdb:2.7.0
+    container_name: komodo-ferretdb
+    # Image already runs as the unprivileged ferretdb user (scratch image, no shell).
+    read_only: true
+    depends_on:
+      komodo-postgres: { condition: service_healthy }
+    environment:
+      FERRETDB_POSTGRESQL_URL: postgres://${KOMODO_DATABASE_USERNAME:-komodo}:${KOMODO_DATABASE_PASSWORD:?set KOMODO_DATABASE_PASSWORD in .env for FerretDB}@komodo-postgres:5432/postgres
+      FERRETDB_TELEMETRY: disable
+    labels:
+      komodo.skip: ""
+    volumes:
+      - komodo-ferretdb-state:/state
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "/ferretdb", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    pids_limit: 200
+    deploy:
+      resources:
+        limits: { cpus: "${FERRETDB_CPUS:-0.5}", memory: "${FERRETDB_MEMORY:-512M}" }
+
+volumes:
+  komodo-postgres-data:
+  komodo-ferretdb-state:

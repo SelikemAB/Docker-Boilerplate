@@ -1,0 +1,20 @@
+# Optional: OIDC single sign-on for Arcane.
+# Usage: docker compose -f compose.yaml -f compose.oidc.yaml up -d
+# Requires secrets/arcane_oidc_client_secret (see README).
+services:
+  arcane:
+    environment:
+      OIDC_ENABLED: "true"
+      OIDC_CLIENT_ID: ${ARCANE_OIDC_CLIENT_ID}
+      OIDC_CLIENT_SECRET_FILE: /run/secrets/arcane_oidc_client_secret
+      OIDC_ISSUER_URL: ${ARCANE_OIDC_ISSUER_URL}
+      OIDC_PROVIDER_NAME: ${ARCANE_OIDC_PROVIDER_NAME:-SSO}
+      OIDC_SCOPES: ${ARCANE_OIDC_SCOPES:-openid email profile groups}
+      OIDC_GROUPS_CLAIM: ${ARCANE_OIDC_GROUPS_CLAIM:-groups}
+      # JSON array, e.g. [{"claimValue":"docker-admins","roleId":"role_admin"}]
+      OIDC_ROLE_MAPPINGS: ${ARCANE_OIDC_ROLE_MAPPINGS:-}
+    secrets: [arcane_oidc_client_secret]
+
+secrets:
+  arcane_oidc_client_secret:
+    file: ./secrets/arcane_oidc_client_secret

@@ -1,0 +1,23 @@
+// Container logs via the read-only Docker socket proxy (never the raw socket).
+// Delete this file to disable Docker log collection.
+discovery.docker "dockerlogs" {
+  host = "tcp://socket-proxy:2375"
+}
+
+discovery.relabel "dockerlogs" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "service_name"
+  }
+}
+
+loki.source.docker "default" {
+  host          = "tcp://socket-proxy:2375"
+  targets       = discovery.docker.dockerlogs.targets
+  labels        = {"platform" = "docker"}
+  relabel_rules = discovery.relabel.dockerlogs.rules
+  forward_to    = [loki.write.default.receiver]
+}

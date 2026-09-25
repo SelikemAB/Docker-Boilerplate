@@ -1,0 +1,126 @@
+# Grafana Alloy — hardened telemetry collector (host + Docker logs and metrics)
+# Docs: https://grafana.com/docs/alloy/latest/
+# - Ships host logs/journal and container logs to Loki, host and container metrics to Prometheus
+# - Talks to Docker only through a read-only, filtered socket proxy
+# - All host mounts are read-only; read-only root FS; only DAC_READ_SEARCH added back
+# - Web UI (no built-in auth) reachable only through Traefik with the internal-only allow-list
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  socket-proxy:
+    <<: *hardening
+    image: docker.io/tecnativa/docker-socket-proxy:v0.5.0
+    container_name: alloy-socket-proxy
+    read_only: true
+    tmpfs: [/tmp, /run]
+    environment:
+      # Read-only access to what discovery.docker, loki.source.docker and cAdvisor need.
+      CONTAINERS: 1
+      NETWORKS: 1
+      EVENTS: 1
+      INFO: 1
+      VERSION: 1
+      PING: 1
+      POST: 0
+      LOG_LEVEL: warning
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
+    networks: [socket]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:2375/_ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    pids_limit: 100
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
+
+  alloy:
+    <<: *hardening
+    image: docker.io/grafana/alloy:v1.19.2
+    container_name: ${CONTAINER_NAME:-alloy}
+    # Upstream image runs as root; non-root is "experimental, undocumented". Root is needed to
+    # read host log files and the journal, but with every capability dropped except the one below.
+    cap_add:
+      - DAC_READ_SEARCH  # read host logs/journal owned by other users (syslog:adm, systemd-journal)
+    # Labels host-level telemetry (constants.hostname). Set to the Docker host's name.
+    hostname: ${ALLOY_HOSTNAME:-docker-host}
+    read_only: true
+    tmpfs:
+      - /tmp
+      # Shadow the host /run inside the read-only rootfs mount: a :ro bind mount does NOT stop
+      # connect() on unix sockets, so this hides the host docker.sock / containerd.sock from Alloy.
+      - /rootfs/run
+    depends_on:
+      socket-proxy: { condition: service_healthy }
+    command:
+      - run
+      - /etc/alloy/alloy.d/
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - --disable-reporting
+    environment:
+      TZ: ${TZ:-UTC}
+      LOKI_URL: ${LOKI_URL:-http://loki:3100/loki/api/v1/push}
+      PROMETHEUS_REMOTE_WRITE_URL: ${PROMETHEUS_REMOTE_WRITE_URL:-http://prometheus:9090/api/v1/write}
+    volumes:
+      - alloy-data:/var/lib/alloy/data
+      - ./config:/etc/alloy/alloy.d:ro
+      # Host filesystem for node metrics (filesystem, /proc, /sys) — read-only.
+      - /:/rootfs:ro
+      - /sys:/sys:ro
+      - /run/udev/data:/run/udev/data:ro
+      # Host logs and the persistent journal (/var/log/journal) — read-only.
+      - /var/log:/var/log:ro
+      # Container metadata for cAdvisor — read-only.
+      - /var/lib/docker:/var/lib/docker:ro
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.alloy.rule: Host(`${ALLOY_HOST}`)
+      traefik.http.routers.alloy.entrypoints: websecure
+      traefik.http.routers.alloy.middlewares: internal-only@file
+      traefik.http.services.alloy.loadbalancer.server.port: "12345"
+    networks: [proxy, monitoring, socket]
+    healthcheck:
+      # The image has no curl/wget; use bash's /dev/tcp against the readiness endpoint.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/12345 &&
+          printf 'GET /-/ready HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 &&
+          head -n1 <&3 | grep -q ' 200 '
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${ALLOY_CPUS:-1.0}", memory: "${ALLOY_MEMORY:-1G}" }
+
+volumes:
+  alloy-data:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  # Shared observability network (Loki, Prometheus, Grafana). Create once, see README.
+  monitoring:
+    name: ${MONITORING_NETWORK:-monitoring}
+    external: true
+  socket:
+    internal: true

@@ -1,0 +1,26 @@
+# Optional: single sign-on via authentik (generic OAuth2/OIDC).
+# Usage: docker compose -f compose.yaml -f compose.authentik.yaml up -d
+# Requires secrets/grafana_oauth_client_secret and the AUTHENTIK_* values in .env.
+services:
+  grafana:
+    environment:
+      GF_AUTH_GENERIC_OAUTH_ENABLED: "true"
+      GF_AUTH_GENERIC_OAUTH_NAME: ${AUTHENTIK_SLUG:-grafana}
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: ${AUTHENTIK_CLIENT_ID}
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET__FILE: /run/secrets/grafana_oauth_client_secret
+      GF_AUTH_GENERIC_OAUTH_SCOPES: openid profile email
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: ${AUTHENTIK_URL}/application/o/authorize/
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: ${AUTHENTIK_URL}/application/o/token/
+      GF_AUTH_GENERIC_OAUTH_API_URL: ${AUTHENTIK_URL}/application/o/userinfo/
+      GF_AUTH_GENERIC_OAUTH_USE_PKCE: "true"
+      GF_AUTH_SIGNOUT_REDIRECT_URL: ${AUTHENTIK_URL}/application/o/${AUTHENTIK_SLUG:-grafana}/end-session/
+      GF_AUTH_OAUTH_AUTO_LOGIN: "true"
+      GF_AUTH_GENERIC_OAUTH_SKIP_ORG_ROLE_SYNC: "true"
+      # Kept from the upstream template: links existing users by e-mail. Only safe when the
+      # IdP verifies e-mail addresses (authentik does by default).
+      GF_AUTH_OAUTH_ALLOW_INSECURE_EMAIL_LOOKUP: "true"
+    secrets: [grafana_oauth_client_secret]
+
+secrets:
+  grafana_oauth_client_secret:
+    file: ./secrets/grafana_oauth_client_secret

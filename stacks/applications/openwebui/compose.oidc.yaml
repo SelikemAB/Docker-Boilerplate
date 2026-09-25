@@ -1,0 +1,19 @@
+# Open WebUI — OpenID Connect login, e.g. authentik (opt-in override)
+#   docker compose -f compose.yaml -f compose.oidc.yaml up -d
+# IdP redirect URI: https://<OPENWEBUI_HOST>/oauth/oidc/callback
+# Open WebUI has no *_FILE support for the client secret, so it is read from .env (chmod 600).
+services:
+  openwebui:
+    environment:
+      ENABLE_OAUTH_SIGNUP: "true"
+      # Settings come from the environment on every start instead of the DB.
+      ENABLE_OAUTH_PERSISTENT_CONFIG: "false"
+      OAUTH_PROVIDER_NAME: ${OAUTH_PROVIDER_NAME:-authentik}
+      OPENID_PROVIDER_URL: ${OPENID_PROVIDER_URL}
+      OPENID_REDIRECT_URI: https://${OPENWEBUI_HOST}/oauth/oidc/callback
+      OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID}
+      OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET}
+      OAUTH_SCOPES: ${OAUTH_SCOPES:-openid email profile}
+      # Linking an OIDC login to an existing local account by e-mail trusts the IdP's
+      # e-mail claim. Leave false unless the IdP verifies addresses.
+      OAUTH_MERGE_ACCOUNTS_BY_EMAIL: ${OAUTH_MERGE_ACCOUNTS_BY_EMAIL:-false}

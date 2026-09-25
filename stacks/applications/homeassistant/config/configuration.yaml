@@ -1,0 +1,25 @@
+# Seed configuration, copied into the config volume on first start only (init-config job).
+# After that, edit /config/configuration.yaml inside the volume. This file isn't read again.
+
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+# Reverse proxy (Traefik). Without this HA answers proxied requests with 400 Bad Request.
+# HA_TRUSTED_PROXIES must cover the subnet of the Docker "proxy" network:
+#   docker network inspect proxy -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}'
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - !env_var HA_TRUSTED_PROXIES 172.16.0.0/12
+    - 127.0.0.1
+    - ::1
+  ip_ban_enabled: true
+  login_attempts_threshold: 10

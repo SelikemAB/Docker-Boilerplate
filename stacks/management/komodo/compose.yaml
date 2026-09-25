@@ -1,0 +1,147 @@
+# Komodo Core — hardened build & deployment automation (Core + MongoDB)
+# Docs: https://komo.do/docs
+# - MongoDB 8.0 LTS on an internal network, non-root, read-only root FS
+# - Secrets (DB password, JWT, webhook, initial admin) via Komodo's *_FILE support
+# - Published only through Traefik, restricted to internal networks
+# Alternatives: compose.ferretdb.yaml (FerretDB/PostgreSQL instead of MongoDB),
+#               compose.periphery.yaml (local Periphery agent, needs the Docker socket)
+# WARNING: Komodo controls every connected Periphery host. Access to Komodo is equivalent
+# to root on those hosts. See README.
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  komodo:
+    <<: *hardening
+    image: ghcr.io/moghtech/komodo-core:2.3.3
+    container_name: ${CONTAINER_NAME:-komodo}
+    hostname: ${CONTAINER_HOSTNAME:-komodo}
+    init: true
+    # Runs as root (upstream image): the entrypoint runs update-ca-certificates.
+    # No capabilities are added back; all state lives in named volumes.
+    depends_on:
+      komodo-mongo: { condition: service_healthy }
+    environment:
+      TZ: ${TZ:-UTC}
+      KOMODO_HOST: https://${KOMODO_HOST}
+      KOMODO_TITLE: ${KOMODO_TITLE:-Komodo}
+      KOMODO_DATABASE_ADDRESS: komodo-mongo:27017
+      KOMODO_DATABASE_DB_NAME: ${KOMODO_DATABASE_DB_NAME:-komodo}
+      KOMODO_DATABASE_USERNAME: ${KOMODO_DATABASE_USERNAME:-komodo}
+      KOMODO_DATABASE_PASSWORD_FILE: /run/secrets/komodo_db_password
+      KOMODO_JWT_SECRET_FILE: /run/secrets/komodo_jwt_secret
+      KOMODO_JWT_TTL: ${KOMODO_JWT_TTL:-1-day}
+      KOMODO_WEBHOOK_SECRET_FILE: /run/secrets/komodo_webhook_secret
+      KOMODO_LOCAL_AUTH: ${KOMODO_LOCAL_AUTH:-true}
+      KOMODO_MIN_PASSWORD_LENGTH: ${KOMODO_MIN_PASSWORD_LENGTH:-12}
+      KOMODO_INIT_ADMIN_USERNAME: ${KOMODO_INIT_ADMIN_USERNAME:-admin}
+      KOMODO_INIT_ADMIN_PASSWORD_FILE: /run/secrets/komodo_admin_password
+      KOMODO_DISABLE_USER_REGISTRATION: ${KOMODO_DISABLE_USER_REGISTRATION:-true}
+      KOMODO_ENABLE_NEW_USERS: ${KOMODO_ENABLE_NEW_USERS:-false}
+      KOMODO_DISABLE_NON_ADMIN_CREATE: ${KOMODO_DISABLE_NON_ADMIN_CREATE:-true}
+      KOMODO_TRANSPARENT_MODE: ${KOMODO_TRANSPARENT_MODE:-false}
+      KOMODO_FIRST_SERVER_NAME: ${KOMODO_FIRST_SERVER_NAME:-Local}
+      KOMODO_MONITORING_INTERVAL: ${KOMODO_MONITORING_INTERVAL:-15-sec}
+      KOMODO_RESOURCE_POLL_INTERVAL: ${KOMODO_RESOURCE_POLL_INTERVAL:-1-hr}
+      KOMODO_OIDC_ENABLED: ${KOMODO_OIDC_ENABLED:-false}
+      KOMODO_OIDC_PROVIDER: ${KOMODO_OIDC_PROVIDER:-}
+      KOMODO_OIDC_REDIRECT_HOST: ${KOMODO_OIDC_REDIRECT_HOST:-}
+      KOMODO_OIDC_CLIENT_ID: ${KOMODO_OIDC_CLIENT_ID:-}
+      KOMODO_LOGGING_LEVEL: ${KOMODO_LOGGING_LEVEL:-info}
+    secrets:
+      - komodo_db_password
+      - komodo_jwt_secret
+      - komodo_webhook_secret
+      - komodo_admin_password
+    volumes:
+      # Core <-> Periphery key pair (generated on first start)
+      - komodo-keys:/config/keys
+      # Dated database backups (https://komo.do/docs/setup/backup)
+      - komodo-backups:/backups
+      - komodo-repo-cache:/repo-cache
+      - komodo-syncs:/syncs
+    labels:
+      komodo.skip: ""  # prevent "Stop All Containers" from stopping Core
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      traefik.http.routers.komodo.rule: Host(`${KOMODO_HOST}`)
+      traefik.http.routers.komodo.entrypoints: websecure
+      traefik.http.routers.komodo.middlewares: internal-only@file
+      traefik.http.services.komodo.loadbalancer.server.port: "9120"
+    # proxy: Traefik ingress + egress (Git, registries, OIDC, alerting); backend: database.
+    networks: [proxy, backend]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:9120/version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    pids_limit: 500
+    deploy:
+      resources:
+        limits: { cpus: "${KOMODO_CPUS:-1.0}", memory: "${KOMODO_MEMORY:-1G}" }
+
+  komodo-mongo:
+    <<: *hardening
+    image: docker.io/library/mongo:8.0.32
+    container_name: komodo-mongo
+    # mongodb user of the official image; the entrypoint skips its chown/gosu step when non-root.
+    user: "999:999"
+    read_only: true
+    tmpfs: [/tmp]
+    command: ["--quiet", "--wiredTigerCacheSizeGB", "${MONGO_WT_CACHE_GB:-0.25}"]
+    environment:
+      TZ: ${TZ:-UTC}
+      MONGO_INITDB_ROOT_USERNAME: ${KOMODO_DATABASE_USERNAME:-komodo}
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/komodo_db_password
+    secrets: [komodo_db_password]
+    labels:
+      komodo.skip: ""
+    volumes:
+      - komodo-mongo-data:/data/db
+      - komodo-mongo-config:/data/configdb
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--norc", "--eval", "quit(db.adminCommand('ping').ok ? 0 : 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    stop_grace_period: 60s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${MONGO_CPUS:-1.0}", memory: "${MONGO_MEMORY:-1G}" }
+
+secrets:
+  komodo_db_password:
+    file: ./secrets/komodo_db_password
+  komodo_jwt_secret:
+    file: ./secrets/komodo_jwt_secret
+  komodo_webhook_secret:
+    file: ./secrets/komodo_webhook_secret
+  komodo_admin_password:
+    file: ./secrets/komodo_admin_password
+
+volumes:
+  komodo-keys:
+  komodo-backups:
+  komodo-repo-cache:
+  komodo-syncs:
+  komodo-mongo-data:
+  komodo-mongo-config:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  backend:
+    internal: true

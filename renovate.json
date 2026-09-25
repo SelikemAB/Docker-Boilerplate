@@ -1,0 +1,89 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":enableVulnerabilityAlertsWithLabel('security')",
+    ":rebaseStalePrs",
+    ":semanticCommits"
+  ],
+  "labels": ["dependencies"],
+  "timezone": "UTC",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 15,
+  "separateMinorPatch": true,
+  "docker-compose": {
+    "managerFilePatterns": ["/(^|/)compose(\\.[\\w-]+)?\\.ya?ml$/"]
+  },
+  "packageRules": [
+    {
+      "description": "One branch/PR per stack",
+      "matchManagers": ["docker-compose"],
+      "additionalBranchPrefix": "{{parentDir}}-",
+      "commitMessageSuffix": "({{parentDir}})"
+    },
+    {
+      "description": "Databases: never auto-propose major upgrades (require data migration)",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": [
+        "/(^|/)postgres$/",
+        "/(^|/)mariadb$/",
+        "/(^|/)mysql$/",
+        "/(^|/)mongo$/",
+        "/(^|/)redis$/",
+        "/(^|/)valkey$/",
+        "/(^|/)influxdb$/",
+        "/postgres-documentdb$/"
+      ],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "Stay on LTS lines for MariaDB (11.8), MySQL (8.4) and MongoDB (8.0)",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/(^|/)mariadb$/"],
+      "allowedVersions": "/^11\\.8\\./"
+    },
+    {
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/(^|/)mysql$/"],
+      "allowedVersions": "/^8\\.4\\./"
+    },
+    {
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/(^|/)mongo$/"],
+      "allowedVersions": "/^8\\.0\\./"
+    },
+    {
+      "description": "Nginx: stable (even minor) releases only",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/nginx/"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d*[02468])\\.(?<patch>\\d+)(?:-(?<compatibility>.*))?$"
+    },
+    {
+      "description": "Canonical bind9 tags: <bind version>-<ubuntu version>_edge",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/ubuntu\\/bind9$/"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)-(?<build>\\d+\\.\\d+)_edge$"
+    },
+    {
+      "description": "Grafana security releases use a -security-N suffix",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/grafana\\/grafana$/"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+(?:-security-\\d+)?)$"
+    },
+    {
+      "description": "Ignore a mistagged Semaphore release",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/semaphore$/"],
+      "allowedVersions": "!/^v?2\\.19\\.10$/"
+    },
+    {
+      "description": "Minor/patch updates of low-risk edge helpers can automerge after CI",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["/docker-socket-proxy$/", "/traefik\\/whoami$/"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    }
+  ]
+}

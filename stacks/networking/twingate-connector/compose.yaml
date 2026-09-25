@@ -1,0 +1,53 @@
+# Twingate Connector — hardened zero-trust network connector
+# Docs: https://www.twingate.com/docs/deploy-connector-with-docker-compose
+# - Distroless vendor image, runs as nonroot (65532), no capabilities
+# - Outbound-only: publishes no ports
+# - Unprivileged ICMP (ping) through a namespaced sysctl instead of NET_RAW
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  twingate-connector:
+    <<: *hardening
+    image: docker.io/twingate/connector:1.93.0
+    container_name: ${CONTAINER_NAME:-twingate-connector}
+    hostname: ${CONNECTOR_HOSTNAME:-twingate-connector}
+    user: "65532:65532"
+    environment:
+      TZ: ${TZ:-UTC}
+      TWINGATE_NETWORK: ${TWINGATE_NETWORK}
+      # The image has no *_FILE support: tokens come from .env (chmod 600, git-ignored).
+      TWINGATE_ACCESS_TOKEN: ${TWINGATE_ACCESS_TOKEN}
+      TWINGATE_REFRESH_TOKEN: ${TWINGATE_REFRESH_TOKEN}
+      TWINGATE_LOG_LEVEL: ${TWINGATE_LOG_LEVEL:-1}
+      # Optional custom DNS server for Resource resolution: add
+      # TWINGATE_DNS: 10.0.0.53
+    sysctls:
+      # Lets the unprivileged user open ICMP sockets (ping to Resources) without NET_RAW.
+      net.ipv4.ping_group_range: "0 2147483647"
+    networks: [twingate]
+    healthcheck:
+      # Same probe as the image's built-in HEALTHCHECK.
+      test: ["CMD", "/connectorctl", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    pids_limit: 200
+    deploy:
+      resources:
+        limits: { cpus: "${CONNECTOR_CPUS:-1.0}", memory: "${CONNECTOR_MEMORY:-1G}" }
+        reservations: { cpus: "${CONNECTOR_CPUS_RESERVATION:-0.25}", memory: "${CONNECTOR_MEMORY_RESERVATION:-512M}" }
+
+networks:
+  # Needs egress to Twingate and to the Resources it serves, so not internal.
+  twingate:
+    name: ${TWINGATE_DOCKER_NETWORK:-twingate}

@@ -1,0 +1,15 @@
+# Optional: publish AdGuard Home's encrypted DNS listeners.
+#   docker compose -f compose.yaml -f compose.encrypted-dns.yaml up -d
+# Enable encryption and add a certificate under Settings -> Encryption first. The seed config
+# listens for DoT and DoQ on 8853 inside the container. DNSCrypt needs `port_dnscrypt: 5443` and a
+# `dnscrypt_config_file` in AdGuardHome.yaml.
+# DNS-over-HTTPS does not need this file: it is served by Traefik on 443 at /dns-query.
+
+services:
+  adguardhome:
+    ports:
+      # HARDENING-EXCEPTION: port — public DoT/DoQ/DNSCrypt listeners are the purpose of this override.
+      - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DOT_PORT:-853}:8853/tcp"
+      - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DOQ_PORT:-853}:8853/udp"
+      - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DNSCRYPT_PORT:-5443}:5443/tcp"
+      - "${DNS_BIND_ADDRESS:-0.0.0.0}:${DNSCRYPT_PORT:-5443}:5443/udp"

@@ -1,0 +1,73 @@
+# Open WebUI — self-hosted chat UI for Ollama and OpenAI-compatible LLM APIs
+# Docs: https://docs.openwebui.com
+# - All capabilities dropped; secret key from a Docker secret (WEBUI_SECRET_KEY_FILE)
+# - Secure session/auth cookies, telemetry off; reached only through Traefik
+# - Optional bundled Ollama in compose.ollama.yaml, optional OIDC in compose.oidc.yaml
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  openwebui:
+    <<: *hardening
+    image: ghcr.io/open-webui/open-webui:v0.11.4
+    container_name: ${CONTAINER_NAME:-openwebui}
+    hostname: ${OPENWEBUI_HOSTNAME:-openwebui}
+    # No user: — the image is built for UID 0 and writes to image paths at runtime
+    # (static assets, pip installs for Tools/Functions). No capabilities are added back.
+    environment:
+      TZ: ${TZ:-UTC}
+      WEBUI_URL: https://${OPENWEBUI_HOST}
+      # start.sh loads the key from this file (and would otherwise generate one in the image FS).
+      WEBUI_SECRET_KEY_FILE: /run/secrets/webui_secret_key
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      ENABLE_SIGNUP: ${OPENWEBUI_ENABLE_SIGNUP:-true}
+      DEFAULT_USER_ROLE: ${OPENWEBUI_DEFAULT_USER_ROLE:-pending}
+      # TLS terminates at Traefik: mark cookies Secure.
+      WEBUI_SESSION_COOKIE_SECURE: "true"
+      WEBUI_AUTH_COOKIE_SECURE: "true"
+      WEBUI_SESSION_COOKIE_SAME_SITE: lax
+      # Only Traefik can reach the port, so trusting forwarded headers from the proxy network is safe.
+      FORWARDED_ALLOW_IPS: "*"
+      # No telemetry / analytics
+      ANONYMIZED_TELEMETRY: "false"
+      DO_NOT_TRACK: "true"
+      SCARF_NO_ANALYTICS: "true"
+    secrets: [webui_secret_key]
+    volumes:
+      - openwebui-data:/app/backend/data
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.openwebui.rule: Host(`${OPENWEBUI_HOST}`)
+      traefik.http.routers.openwebui.entrypoints: websecure
+      traefik.http.services.openwebui.loadbalancer.server.port: "8080"
+    networks: [proxy]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --silent --fail http://127.0.0.1:8080/health | jq -ne 'input.status == true' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s  # first start runs migrations and loads the embedding model
+    pids_limit: 1024
+    deploy:
+      resources:
+        limits: { cpus: "${OPENWEBUI_CPUS:-2.0}", memory: "${OPENWEBUI_MEMORY:-4G}" }
+
+secrets:
+  webui_secret_key:
+    file: ./secrets/webui_secret_key
+
+volumes:
+  openwebui-data:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

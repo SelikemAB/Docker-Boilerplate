@@ -1,0 +1,15 @@
+// Primary zone. The zone file lives in the bind9-zones volume (seeded from
+// config/zones/db.primary.zone on first start) so dynamic updates and inline signing can write
+// their journal and .signed files next to it.
+zone "home.arpa" {
+    type primary;
+    file "/var/lib/bind/db.primary.zone";
+
+    // Zone transfers and dynamic updates only with the TSIG key
+    allow-transfer { key "tsig-transfer-key"; };
+    allow-update { key "tsig-transfer-key"; };
+
+    // DNSSEC: automatic key management and signing (keys in /var/cache/bind)
+    dnssec-policy default;
+    inline-signing yes;
+};

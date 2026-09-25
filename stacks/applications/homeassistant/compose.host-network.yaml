@@ -1,0 +1,83 @@
+# Home Assistant — host-network variant (opt-in, STANDALONE file)
+# Use INSTEAD of compose.yaml, because Compose can't remove the base file's networks with an override:
+#   docker compose -f compose.host-network.yaml up -d
+#   docker compose -f compose.host-network.yaml -f compose.devices.yaml up -d   # + USB sticks
+# Needed for discovery that relies on multicast/broadcast on the LAN: mDNS/zeroconf, SSDP/UPnP,
+# DHCP discovery, HomeKit Bridge, Sonos/Chromecast, Matter/Thread, and Bluetooth via BlueZ/D-Bus.
+# HA listens directly on the host at :8123. Traefik can't route to it through the proxy
+# network. Use the Traefik file provider with the host IP, or open http://<host>:8123.
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  homeassistant:
+    <<: *hardening
+    image: ghcr.io/home-assistant/home-assistant:2026.9.3
+    container_name: ${CONTAINER_NAME:-homeassistant}
+    # HARDENING-EXCEPTION: host network — LAN discovery protocols (mDNS, SSDP, DHCP, HomeKit, Bluetooth) need the host's interfaces.
+    network_mode: host
+    cap_add:
+      - CHOWN         # s6-overlay prepares /run and service dirs
+      - DAC_OVERRIDE  # s6-overlay and integrations writing root-owned paths
+      - FOWNER        # chmod on files in /config and /run
+      - SETUID        # s6 service supervision / privilege switching
+      - SETGID        # s6 service supervision / privilege switching
+      - NET_RAW       # DHCP discovery (raw sockets), Bluetooth HCI sockets
+      - NET_ADMIN     # Bluetooth adapter management via BlueZ
+    depends_on:
+      init-config: { condition: service_completed_successfully }
+    environment:
+      TZ: ${TZ:-UTC}
+      HA_TRUSTED_PROXIES: ${HA_TRUSTED_PROXIES:-172.16.0.0/12}
+    volumes:
+      - homeassistant-config:/config
+      # Host D-Bus for Bluetooth (BlueZ) and some system integrations.
+      - /run/dbus:/run/dbus:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8123/manifest.json"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
+    stop_grace_period: 4m
+    pids_limit: 1024
+    deploy:
+      resources:
+        limits: { cpus: "${HA_CPUS:-2.0}", memory: "${HA_MEMORY:-2G}" }
+
+  init-config:
+    image: ghcr.io/home-assistant/home-assistant:2026.9.3
+    restart: "no"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        if [ ! -f /config/configuration.yaml ]; then
+        cp /seed/configuration.yaml /config/configuration.yaml &&
+        echo '[]' > /config/automations.yaml &&
+        touch /config/scripts.yaml /config/scenes.yaml &&
+        mkdir -p /config/themes &&
+        echo 'Seeded configuration.yaml';
+        else echo 'configuration.yaml exists, leaving it untouched'; fi
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    network_mode: none
+    volumes:
+      - homeassistant-config:/config
+      - ./config/configuration.yaml:/seed/configuration.yaml:ro
+    logging: *logging
+    pids_limit: 20
+    deploy:
+      resources:
+        limits: { cpus: "0.1", memory: 32M }
+
+volumes:
+  homeassistant-config:

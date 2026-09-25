@@ -1,0 +1,92 @@
+# Checkmk Community — hardened infrastructure monitoring server
+# Docs: https://docs.checkmk.com/latest/en/introduction_docker.html
+# - GUI via Traefik (internal-only); agent receiver and SNMP traps bound to loopback by default
+# - Admin password via Docker secret (wrapper entrypoint; the image has no *_FILE support)
+# - Starts as root (OMD site management), all capabilities dropped except the minimum below
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  checkmk:
+    <<: *hardening
+    image: docker.io/checkmk/check-mk-community:2.5.0p14
+    container_name: ${CONTAINER_NAME:-checkmk}
+    # HARDENING-EXCEPTION: no-new-privileges — check_icmp/check_dhcp and mkeventd_open514 are
+    # setuid-root helpers; with no-new-privileges host ping checks and SNMP trap reception fail.
+    security_opt: []
+    # The entrypoint runs as root (useradd, chown, omd, cron, xinetd) and drops to the site
+    # user (UID 1000) for all Checkmk processes. Only what that needs is added back:
+    cap_add:
+      - CHOWN         # chown site files during create/update
+      - DAC_OVERRIDE  # root manages files owned by the site user
+      - FOWNER        # chmod/utime on site-owned files
+      - FSETID        # keep setgid bits on site directories
+      - SETUID        # su / cron / omd switch to the site user
+      - SETGID        # same, for groups
+      - KILL          # omd stop signals site processes (other UID)
+      - AUDIT_WRITE   # PAM session logging for su/cron
+      - NET_RAW       # ICMP host checks (check_icmp raw sockets)
+    tmpfs:
+      - /tmp
+      # Site tmp on tmpfs, as recommended upstream (owned by the site user).
+      - /opt/omd/sites/${CMK_SITE_ID:-cmk}/tmp:uid=1000,gid=1000
+    # Read the admin password from the secret, then hand over to the upstream entrypoint.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - >-
+        CMK_PASSWORD="$$(cat /run/secrets/cmk_password)" && export CMK_PASSWORD &&
+        exec /docker-entrypoint.sh "$$@"
+      - docker-entrypoint
+    environment:
+      TZ: ${TZ:-UTC}
+      CMK_SITE_ID: ${CMK_SITE_ID:-cmk}
+      MAIL_RELAY_HOST: ${CMK_MAIL_RELAY_HOST:-}
+    secrets: [cmk_password]
+    volumes:
+      - checkmk-data:/omd/sites
+    ports:
+      # Agent receiver (agent registration / push). Set CMK_BIND_ADDRESS to a LAN IP for agents.
+      - "${CMK_BIND_ADDRESS:-127.0.0.1}:${CMK_AGENT_PORT:-8000}:8000"
+      # SNMP traps.
+      - "${CMK_BIND_ADDRESS:-127.0.0.1}:${CMK_SNMP_TRAP_PORT:-162}:162/udp"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.checkmk.rule: Host(`${CHECKMK_HOST}`)
+      traefik.http.routers.checkmk.entrypoints: websecure
+      traefik.http.routers.checkmk.middlewares: internal-only@file
+      traefik.http.services.checkmk.loadbalancer.server.port: "5000"
+    # proxy is non-internal: Checkmk needs outbound access to poll agents (6556) and devices.
+    networks: [proxy]
+    healthcheck:
+      # Same probe as the upstream image: all site processes running.
+      test: ["CMD-SHELL", "omd status >/dev/null || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
+    stop_grace_period: 60s
+    pids_limit: 2000
+    deploy:
+      resources:
+        limits: { cpus: "${CHECKMK_CPUS:-2.0}", memory: "${CHECKMK_MEMORY:-4G}" }
+
+secrets:
+  cmk_password:
+    file: ./secrets/cmk_password
+
+volumes:
+  checkmk-data:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

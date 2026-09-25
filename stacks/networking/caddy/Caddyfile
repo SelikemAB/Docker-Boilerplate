@@ -1,0 +1,26 @@
+# Global options. {$VAR:default} placeholders are filled from the container environment.
+{
+	email {$ACME_EMAIL:admin@example.com}
+	# Unprivileged ports inside the container; the host maps 80/443 to them.
+	# ACME HTTP-01/TLS-ALPN-01 challenges still work through that mapping.
+	http_port 8080
+	https_port 8443
+	# Admin API on loopback only (used by the healthcheck and `caddy reload`).
+	admin localhost:2019
+}
+
+# Reusable hardening snippet: `import security` inside a site block.
+(security) {
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		-Server
+		-X-Powered-By
+	}
+}
+
+# Site definitions live in config/*.caddy (mounted read-only).
+import /etc/caddy/config/*.caddy

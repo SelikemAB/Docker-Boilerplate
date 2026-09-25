@@ -1,0 +1,6 @@
+# Traefik access log written to a host file (needs compose.traefik-logfile.yaml).
+# Copy to config/acquis.d/ to enable.
+filenames:
+  - /var/log/traefik/access.log
+labels:
+  type: traefik

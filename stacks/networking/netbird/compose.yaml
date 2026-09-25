@@ -1,0 +1,137 @@
+# NetBird — hardened self-hosted WireGuard mesh VPN control plane
+# Docs: https://docs.netbird.io/selfhosted/selfhosted-quickstart
+# - Combined netbird-server (Management + Signal + Relay + STUN + embedded IdP)
+# - Published through the existing traefik stack (HTTPS, gRPC via h2c); only STUN is exposed
+# - Server runs as non-root with a read-only root FS; config (with secrets) is a Docker secret
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  netbird-server:
+    <<: *hardening
+    image: docker.io/netbirdio/netbird-server:0.79.0
+    container_name: netbird-server
+    user: "${PUID:-65532}:${PGID:-65532}"
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      init-perms: { condition: service_completed_successfully }
+    # config.yaml holds authSecret and the store encryption key, so it is mounted as a secret.
+    command: ["--config", "/run/secrets/netbird_config"]
+    environment:
+      TZ: ${TZ:-UTC}
+    secrets: [netbird_config]
+    ports:
+      # HARDENING-EXCEPTION: port — STUN must be reachable by all peers for NAT traversal.
+      - "${EDGE_BIND_ADDRESS:-0.0.0.0}:${STUN_PORT:-3478}:3478/udp"
+    volumes:
+      - netbird-data:/var/lib/netbird
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      # gRPC (Signal / Management) needs an h2c backend service.
+      traefik.http.routers.netbird-grpc.rule: Host(`${NETBIRD_HOST}`) && (PathPrefix(`/signalexchange.SignalExchange/`) || PathPrefix(`/management.ManagementService/`) || PathPrefix(`/management.ProxyService/`))
+      traefik.http.routers.netbird-grpc.entrypoints: websecure
+      traefik.http.routers.netbird-grpc.service: netbird-server-h2c
+      traefik.http.routers.netbird-backend.rule: Host(`${NETBIRD_HOST}`) && (PathPrefix(`/relay`) || PathPrefix(`/ws-proxy/`) || PathPrefix(`/api`) || PathPrefix(`/oauth2`))
+      traefik.http.routers.netbird-backend.entrypoints: websecure
+      traefik.http.routers.netbird-backend.service: netbird-server
+      traefik.http.services.netbird-server.loadbalancer.server.port: "8080"
+      traefik.http.services.netbird-server-h2c.loadbalancer.server.port: "8080"
+      traefik.http.services.netbird-server-h2c.loadbalancer.server.scheme: h2c
+    networks: [proxy]
+    healthcheck:
+      # Ubuntu base without curl/wget: probe the /health endpoint (:9000) with bash /dev/tcp.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 30s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${NETBIRD_CPUS:-2.0}", memory: "${NETBIRD_MEMORY:-1G}" }
+
+  dashboard:
+    <<: *hardening
+    image: docker.io/netbirdio/dashboard:v2.93.0
+    container_name: netbird-dashboard
+    # supervisord + nginx image: starts as root, renders runtime env into the web root,
+    # then nginx drops its workers to the nginx user.
+    cap_add:
+      - CHOWN             # nginx prepares its temp/cache dirs
+      - SETUID            # nginx workers switch to the nginx user
+      - SETGID
+      - DAC_OVERRIDE      # master process enters nginx-owned directories
+      - NET_BIND_SERVICE  # nginx listens on port 80 inside the container
+    depends_on:
+      netbird-server: { condition: service_healthy }
+    environment:
+      TZ: ${TZ:-UTC}
+      NETBIRD_MGMT_API_ENDPOINT: https://${NETBIRD_HOST}
+      NETBIRD_MGMT_GRPC_API_ENDPOINT: https://${NETBIRD_HOST}
+      AUTH_AUDIENCE: netbird-dashboard
+      AUTH_CLIENT_ID: netbird-dashboard
+      AUTH_CLIENT_SECRET: ""
+      AUTH_AUTHORITY: https://${NETBIRD_HOST}/oauth2
+      USE_AUTH0: "false"
+      AUTH_SUPPORTED_SCOPES: openid profile email groups
+      AUTH_REDIRECT_URI: /nb-auth
+      AUTH_SILENT_REDIRECT_URI: /nb-silent-auth
+      NGINX_SSL_PORT: "443"
+      LETSENCRYPT_DOMAIN: none
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      traefik.http.routers.netbird-dashboard.rule: Host(`${NETBIRD_HOST}`)
+      traefik.http.routers.netbird-dashboard.entrypoints: websecure
+      traefik.http.routers.netbird-dashboard.priority: "1"
+      traefik.http.services.netbird-dashboard.loadbalancer.server.port: "80"
+    networks: [proxy]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    pids_limit: 100
+    deploy:
+      resources:
+        limits: { cpus: "${DASHBOARD_CPUS:-0.5}", memory: "${DASHBOARD_MEMORY:-256M}" }
+
+  # One-shot helper: makes the data volume writable by the non-root server user.
+  init-perms:
+    image: docker.io/netbirdio/netbird-server:0.79.0
+    restart: "no"
+    entrypoint: ["sh", "-c", "chown -R ${PUID:-65532}:${PGID:-65532} /var/lib/netbird && chmod 700 /var/lib/netbird"]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]  # needed only to chown the data volume
+    network_mode: none
+    volumes: [netbird-data:/var/lib/netbird]
+    logging: *logging
+    pids_limit: 20
+    deploy:
+      resources:
+        limits: { cpus: "0.1", memory: 32M }
+
+secrets:
+  netbird_config:
+    file: ./secrets/netbird_config.yaml
+
+volumes:
+  netbird-data:   # SQLite stores (management, events, IdP), GeoLite DBs, relay/signal state
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

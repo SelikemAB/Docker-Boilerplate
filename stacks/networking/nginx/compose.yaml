@@ -1,0 +1,52 @@
+# Nginx — hardened static web server behind Traefik
+# Docs: https://github.com/nginx/docker-nginx-unprivileged
+# - nginx-unprivileged image: runs as UID 101 on port 8080, read-only root FS
+# - No published ports: reached through Traefik on the shared proxy network
+# - Config and content mounted read-only
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  nginx:
+    <<: *hardening
+    image: docker.io/nginxinc/nginx-unprivileged:1.30.5-alpine
+    container_name: ${CONTAINER_NAME:-nginx}
+    user: "101:101"
+    read_only: true
+    # pid file and all *_temp paths live in /tmp in the unprivileged image.
+    tmpfs: [/tmp, /var/cache/nginx]
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./config/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${NGINX_CONTENT_PATH:-./html}:/usr/share/nginx/html:ro
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      traefik.http.routers.nginx.rule: Host(`${NGINX_HOST}`)
+      traefik.http.routers.nginx.entrypoints: websecure
+      traefik.http.services.nginx.loadbalancer.server.port: "8080"
+    networks: [proxy]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    pids_limit: 100
+    deploy:
+      resources:
+        limits: { cpus: "${NGINX_CPUS:-0.5}", memory: "${NGINX_MEMORY:-128M}" }
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true

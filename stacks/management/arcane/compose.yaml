@@ -1,0 +1,131 @@
+# Arcane — hardened Docker management UI (manager)
+# Docs: https://getarcane.app/docs
+# - Talks to Docker through a filtered socket proxy (DOCKER_HOST=tcp://...), never the raw socket
+# - Runs as non-root (65532) with a read-only root FS; secrets via *_FILE
+# - Published only through Traefik, restricted to internal networks
+# WARNING: whoever can log in to Arcane effectively has root on this host. See README.
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  socket-proxy:
+    <<: *hardening
+    image: docker.io/tecnativa/docker-socket-proxy:v0.5.0
+    container_name: arcane-socket-proxy
+    read_only: true
+    tmpfs: [/tmp, /run]
+    environment:
+      # Arcane manages containers, images, networks, volumes, builds and exec sessions,
+      # so it needs write (POST/DELETE) access. Swarm, secrets, plugins and auth stay blocked.
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      EXEC: 1
+      BUILD: 1
+      DISTRIBUTION: 1
+      INFO: 1
+      SYSTEM: 1
+      EVENTS: 1
+      VERSION: 1
+      PING: 1
+      ALLOW_START: 1
+      ALLOW_STOP: 1
+      ALLOW_RESTARTS: 1
+      POST: 1
+      AUTH: 0
+      SECRETS: 0
+      SWARM: 0
+      NODES: 0
+      SERVICES: 0
+      TASKS: 0
+      CONFIGS: 0
+      PLUGINS: 0
+      SESSION: 0
+      COMMIT: 0
+      LOG_LEVEL: warning
+    volumes:
+      # HARDENING-EXCEPTION: docker socket — Arcane is a container manager and needs write access to the Docker API (POST=1). Mounted only into this filtered proxy on an internal network, never into the web app.
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
+    networks: [socket]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:2375/_ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    pids_limit: 100
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
+
+  arcane:
+    <<: *hardening
+    image: ghcr.io/getarcaneapp/manager:v2.13.1
+    container_name: ${CONTAINER_NAME:-arcane}
+    # Image default runtime user; starting directly as it skips Arcane's root->PUID re-exec.
+    user: "65532:65532"
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      socket-proxy: { condition: service_healthy }
+    environment:
+      TZ: ${TZ:-UTC}
+      APP_URL: https://${ARCANE_HOST}
+      DOCKER_HOST: tcp://socket-proxy:2375
+      ENCRYPTION_KEY_FILE: /run/secrets/arcane_encryption_key
+      JWT_SECRET_FILE: /run/secrets/arcane_jwt_secret
+      PROJECTS_DIRECTORY: ${ARCANE_PROJECTS_DIRECTORY:-/app/data/projects}
+      ANALYTICS_DISABLED: ${ARCANE_ANALYTICS_DISABLED:-true}
+      UPDATE_CHECK_DISABLED: ${ARCANE_UPDATE_CHECK_DISABLED:-false}
+      TRUSTED_PROXIES: ${ARCANE_TRUSTED_PROXIES:-}
+      LOG_LEVEL: ${ARCANE_LOG_LEVEL:-info}
+      LOG_JSON: "true"
+    secrets: [arcane_encryption_key, arcane_jwt_secret]
+    volumes:
+      - arcane-data:/app/data
+      - arcane-builds:/builds
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      traefik.http.routers.arcane.rule: Host(`${ARCANE_HOST}`)
+      traefik.http.routers.arcane.entrypoints: websecure
+      traefik.http.routers.arcane.middlewares: internal-only@file
+      traefik.http.services.arcane.loadbalancer.server.port: "3552"
+    # proxy: Traefik ingress + egress (registries, OIDC, update checks); socket: Docker API.
+    networks: [proxy, socket]
+    healthcheck:
+      test: ["CMD", "/app/arcane", "health", "--timeout", "2s"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    pids_limit: 500
+    deploy:
+      resources:
+        limits: { cpus: "${ARCANE_CPUS:-1.0}", memory: "${ARCANE_MEMORY:-1G}" }
+
+secrets:
+  arcane_encryption_key:
+    file: ./secrets/arcane_encryption_key
+  arcane_jwt_secret:
+    file: ./secrets/arcane_jwt_secret
+
+volumes:
+  arcane-data:
+  arcane-builds:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  socket:
+    internal: true

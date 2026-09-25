@@ -1,0 +1,46 @@
+# Teleport configuration (auth + proxy on one node, multiplexed TLS routing).
+# Replace teleport.example.com with your TELEPORT_PUBLIC_HOST before the first start:
+# cluster_name cannot be changed afterwards.
+version: v3
+teleport:
+  nodename: teleport-prod-1
+  data_dir: /var/lib/teleport
+  log:
+    output: stderr
+    severity: INFO          # DEBUG | INFO | WARN | ERROR
+    format:
+      output: json
+
+auth_service:
+  enabled: true
+  listen_addr: 0.0.0.0:3025
+  proxy_listener_mode: multiplex
+  cluster_name: teleport.example.com
+  authentication:
+    type: local
+    # Equivalent of the deprecated `second_factor: on` (MFA always required).
+    second_factors: ["webauthn", "otp"]
+    webauthn:
+      rp_id: teleport.example.com
+    connector_name: passwordless
+
+ssh_service:
+  enabled: false
+
+proxy_service:
+  enabled: true
+  web_listen_addr: 0.0.0.0:3080
+  public_addr: ["teleport.example.com:443"]
+  # Traefik terminates public TLS (L7). Teleport serves a self-signed cert to Traefik
+  # and tsh/agents use ALPN connection upgrades through the L7 proxy.
+  https_keypairs: []
+  acme: {}
+  # Take client IPs from X-Forwarded-For (set by Traefik) for audit logs and rate limits.
+  trust_x_forwarded_for: true
+
+app_service:
+  enabled: false
+  # apps:
+  #   - name: "yourapp"
+  #     uri: "http://your-app-url"
+  #     insecure_skip_verify: false

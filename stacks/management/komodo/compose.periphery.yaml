@@ -1,0 +1,66 @@
+# Optional: Komodo Periphery agent on the same host as Core (outbound mode, key-based auth).
+# Usage: docker compose -f compose.yaml -f compose.periphery.yaml up -d
+#        (combine with compose.ferretdb.yaml as needed)
+# WARNING: Periphery has full Docker control. It is root-equivalent on this host.
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  komodo:
+    environment:
+      # Accept the Periphery public key generated into the shared keys volume.
+      KOMODO_PERIPHERY_PUBLIC_KEY: file:/config/keys/periphery.pub
+
+  komodo-periphery:
+    <<: *hardening
+    image: ghcr.io/moghtech/komodo-periphery:2.3.3
+    container_name: komodo-periphery
+    init: true
+    # Runs as root (upstream image): it drives the Docker CLI / Compose against the root-owned
+    # socket and manages PERIPHERY_ROOT_DIRECTORY. No capabilities are added back.
+    depends_on:
+      komodo: { condition: service_healthy }
+    environment:
+      TZ: ${TZ:-UTC}
+      # Outbound mode: Periphery dials Core; no inbound port is opened.
+      PERIPHERY_CORE_ADDRESS: ws://komodo:9120
+      PERIPHERY_CONNECT_AS: ${KOMODO_FIRST_SERVER_NAME:-Local}
+      PERIPHERY_CORE_PUBLIC_KEYS: file:/config/keys/core.pub
+      PERIPHERY_ROOT_DIRECTORY: ${PERIPHERY_ROOT_DIRECTORY:-/etc/komodo}
+      # Remote shells into the Periphery container (= host root via the socket) are disabled by default.
+      PERIPHERY_DISABLE_TERMINALS: ${PERIPHERY_DISABLE_TERMINALS:-true}
+      PERIPHERY_DISABLE_CONTAINER_TERMINALS: ${PERIPHERY_DISABLE_CONTAINER_TERMINALS:-false}
+      PERIPHERY_INCLUDE_DISK_MOUNTS: /etc/hostname
+      PERIPHERY_LOGGING_LEVEL: ${KOMODO_LOGGING_LEVEL:-info}
+    labels:
+      komodo.skip: ""
+    volumes:
+      - komodo-keys:/config/keys
+      # HARDENING-EXCEPTION: docker socket — Periphery deploys stacks/containers and runs builds for Komodo; it requires full Docker API access and has no socket-proxy mode.
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      # Must be the same path inside and outside the container (compose relative paths).
+      - ${PERIPHERY_ROOT_DIRECTORY:-/etc/komodo}:${PERIPHERY_ROOT_DIRECTORY:-/etc/komodo}
+    # backend: reach Core; periphery-egress: git clone / registry access.
+    networks: [backend, periphery-egress]
+    healthcheck:
+      # Periphery has no HTTP listener in outbound mode; verify its Docker API access instead.
+      test: ["CMD-SHELL", "docker version --format '{{.Server.Version}}' >/dev/null || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    pids_limit: 1000
+    deploy:
+      resources:
+        limits: { cpus: "${PERIPHERY_CPUS:-2.0}", memory: "${PERIPHERY_MEMORY:-2G}" }
+
+networks:
+  periphery-egress: {}

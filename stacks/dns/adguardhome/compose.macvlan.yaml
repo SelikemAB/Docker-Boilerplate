@@ -1,0 +1,29 @@
+# Optional: give AdGuard Home its own IP address on the LAN (macvlan).
+#   docker compose -f compose.yaml -f compose.macvlan.yaml up -d
+# Clients query <MACVLAN_IPV4_ADDRESS>:53 directly, so AdGuard must listen on port 53 inside the
+# container. The seed below only applies on FIRST start; on an existing install set `dns.port: 53`
+# in AdGuardHome.yaml instead. Note: the Docker host itself cannot reach a macvlan address
+# without an extra macvlan shim interface on the host.
+
+services:
+  init-config:
+    environment:
+      ADGUARD_DNS_PORT: "53"
+
+  adguardhome:
+    sysctls:
+      # Lets the non-root process bind port 53 in its own network namespace (no capability needed).
+      net.ipv4.ip_unprivileged_port_start: "53"
+    networks:
+      lan:
+        ipv4_address: ${MACVLAN_IPV4_ADDRESS:?set MACVLAN_IPV4_ADDRESS in .env}
+
+networks:
+  lan:
+    driver: macvlan
+    driver_opts:
+      parent: ${MACVLAN_PARENT:-eth0}
+    ipam:
+      config:
+        - subnet: ${MACVLAN_SUBNET:?set MACVLAN_SUBNET in .env}
+          gateway: ${MACVLAN_GATEWAY:?set MACVLAN_GATEWAY in .env}

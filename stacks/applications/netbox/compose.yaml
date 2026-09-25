@@ -1,0 +1,255 @@
+# NetBox — IPAM/DCIM source of truth (netbox-docker image)
+# Docs: https://github.com/netbox-community/netbox-docker/wiki
+# - NetBox, worker, PostgreSQL 18 and two Redis instances; all non-root, no capabilities,
+#   read-only root FS
+# - Every secret is a Docker secret read natively from /run/secrets (no passwords in env)
+# - Backend on an internal network; UI through Traefik, restricted to internal networks
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+# Shared by netbox and netbox-worker. netbox-docker's configuration.py reads
+# db_password, redis_password, redis_cache_password, secret_key, api_token_pepper_1,
+# email_password and superuser_password from /run/secrets/<name>.
+x-netbox-env: &netbox-env
+  TZ: ${TZ:-UTC}
+  TIME_ZONE: ${TZ:-UTC}
+  ALLOWED_HOSTS: ${NETBOX_HOST}
+  CSRF_TRUSTED_ORIGINS: https://${NETBOX_HOST}
+  DB_HOST: postgres
+  DB_NAME: ${NETBOX_DB_NAME:-netbox}
+  DB_USER: ${NETBOX_DB_USER:-netbox}
+  REDIS_HOST: redis
+  REDIS_DATABASE: "0"
+  REDIS_CACHE_HOST: redis-cache
+  REDIS_CACHE_DATABASE: "1"
+  # First-start superuser (skipped if the user already exists)
+  SKIP_SUPERUSER: "false"
+  SUPERUSER_NAME: ${NETBOX_SUPERUSER_NAME:-admin}
+  SUPERUSER_EMAIL: ${NETBOX_SUPERUSER_EMAIL:-admin@example.com}
+  LOGIN_REQUIRED: "true"
+  METRICS_ENABLED: ${NETBOX_METRICS_ENABLED:-false}
+  CENSUS_REPORTING_ENABLED: ${NETBOX_CENSUS_REPORTING_ENABLED:-false}
+  GRANIAN_WORKERS: ${NETBOX_GRANIAN_WORKERS:-4}
+  # E-mail (EMAIL_USE_SSL and EMAIL_USE_TLS are mutually exclusive)
+  EMAIL_SERVER: ${NETBOX_EMAIL_SERVER:-localhost}
+  EMAIL_PORT: ${NETBOX_EMAIL_PORT:-25}
+  EMAIL_USERNAME: ${NETBOX_EMAIL_USERNAME:-}
+  EMAIL_FROM: ${NETBOX_EMAIL_FROM:-netbox@example.com}
+  EMAIL_USE_SSL: ${NETBOX_EMAIL_USE_SSL:-false}
+  EMAIL_USE_TLS: ${NETBOX_EMAIL_USE_TLS:-false}
+  EMAIL_TIMEOUT: "10"
+
+x-netbox-secrets: &netbox-secrets
+  - db_password
+  - redis_password
+  - redis_cache_password
+  - secret_key
+  - api_token_pepper_1
+  - email_password
+  - superuser_password
+
+x-netbox-volumes: &netbox-volumes
+  - netbox-media:/opt/netbox/netbox/media
+  - netbox-reports:/opt/netbox/netbox/reports
+  - netbox-scripts:/opt/netbox/netbox/scripts
+
+services:
+  netbox:
+    <<: *hardening
+    image: docker.io/netboxcommunity/netbox:v4.7.1
+    container_name: ${CONTAINER_NAME:-netbox}
+    user: "999:0"  # netbox:root, as upstream (data dirs are group-writable for GID 0)
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      redis-cache: { condition: service_healthy }
+    environment: *netbox-env
+    secrets: *netbox-secrets
+    volumes: *netbox-volumes
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.netbox.rule: Host(`${NETBOX_HOST}`)
+      traefik.http.routers.netbox.entrypoints: websecure
+      traefik.http.routers.netbox.middlewares: ${NETBOX_MIDDLEWARES:-internal-only@file}
+      traefik.http.services.netbox.loadbalancer.server.port: "8080"
+    networks: [proxy, backend]
+    healthcheck:
+      test: ["CMD", "/opt/netbox/health.sh"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 180s  # first start runs all DB migrations
+    pids_limit: 512
+    deploy:
+      resources:
+        limits: { cpus: "${NETBOX_CPUS:-2.0}", memory: "${NETBOX_MEMORY:-2G}" }
+
+  # Background jobs: webhooks/event rules, scripts, reports, data sync, and NetBox's built-in
+  # housekeeping system job (NetBox 4.2+ schedules it in the worker; the separate
+  # netbox-housekeeping container and `manage.py housekeeping` no longer exist in 4.7).
+  netbox-worker:
+    <<: *hardening
+    image: docker.io/netboxcommunity/netbox:v4.7.1
+    container_name: ${CONTAINER_NAME:-netbox}-worker
+    user: "999:0"
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      netbox: { condition: service_healthy }
+    command:
+      - /opt/netbox/venv/bin/python
+      - /opt/netbox/netbox/manage.py
+      - rqworker
+    environment: *netbox-env
+    secrets: *netbox-secrets
+    volumes: *netbox-volumes
+    # egress: webhooks, SMTP, remote data sources (Git/S3)
+    networks: [backend, egress]
+    healthcheck:
+      test: ["CMD-SHELL", "ps -aux | grep -v grep | grep -q rqworker || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    pids_limit: 256
+    deploy:
+      resources:
+        limits: { cpus: "${NETBOX_WORKER_CPUS:-1.0}", memory: "${NETBOX_WORKER_MEMORY:-1G}" }
+
+  postgres:
+    <<: *hardening
+    image: docker.io/library/postgres:18.6-alpine
+    container_name: ${CONTAINER_NAME:-netbox}-postgres
+    user: "70:70"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    shm_size: 256m
+    environment:
+      TZ: ${TZ:-UTC}
+      POSTGRES_USER: ${NETBOX_DB_USER:-netbox}
+      POSTGRES_DB: ${NETBOX_DB_NAME:-netbox}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256 --data-checksums"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    secrets: [db_password]
+    volumes:
+      - netbox-postgres:/var/lib/postgresql
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -t 2 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    pids_limit: 200
+    deploy:
+      resources:
+        limits: { cpus: "${NETBOX_DB_CPUS:-1.0}", memory: "${NETBOX_DB_MEMORY:-1G}" }
+
+  # Task queue (persistent, AOF enabled)
+  redis:
+    <<: *hardening
+    image: docker.io/library/redis:8.10.2-alpine
+    container_name: ${CONTAINER_NAME:-netbox}-redis
+    user: "999:1000"  # redis:redis in the Alpine image
+    read_only: true
+    tmpfs: [/tmp]
+    # The password is written from the secret into a tmpfs config file, so it never
+    # appears on the command line or in docker inspect.
+    command:
+      - sh
+      - -c
+      - >-
+        umask 077 &&
+        printf 'requirepass %s\n' "$$(cat /run/secrets/redis_password)" > /tmp/redis.conf &&
+        exec redis-server /tmp/redis.conf --appendonly yes --dir /data
+    secrets: [redis_password]
+    volumes:
+      - netbox-redis:/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/redis_password)\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    pids_limit: 100
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 512M }
+
+  # Cache (ephemeral, no persistence)
+  redis-cache:
+    <<: *hardening
+    image: docker.io/library/redis:8.10.2-alpine
+    container_name: ${CONTAINER_NAME:-netbox}-redis-cache
+    user: "999:1000"
+    read_only: true
+    tmpfs: [/tmp]
+    command:
+      - sh
+      - -c
+      - >-
+        umask 077 &&
+        printf 'requirepass %s\n' "$$(cat /run/secrets/redis_cache_password)" > /tmp/redis.conf &&
+        exec redis-server /tmp/redis.conf --save "" --appendonly no --dir /data
+        --maxmemory 256mb --maxmemory-policy allkeys-lru
+    secrets: [redis_cache_password]
+    volumes:
+      - netbox-redis-cache:/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/redis_cache_password)\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    pids_limit: 100
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 384M }
+
+secrets:
+  db_password:
+    file: ./secrets/db_password
+  redis_password:
+    file: ./secrets/redis_password
+  redis_cache_password:
+    file: ./secrets/redis_cache_password
+  secret_key:
+    file: ./secrets/secret_key
+  api_token_pepper_1:
+    file: ./secrets/api_token_pepper_1
+  email_password:
+    file: ./secrets/email_password
+  superuser_password:
+    file: ./secrets/superuser_password
+
+volumes:
+  netbox-postgres:
+  netbox-redis:
+  netbox-redis-cache:
+  netbox-media:
+  netbox-reports:
+  netbox-scripts:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  backend:
+    internal: true
+  egress:

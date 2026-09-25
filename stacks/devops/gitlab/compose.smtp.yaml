@@ -1,0 +1,16 @@
+# Optional: outgoing e-mail via SMTP. Password in ./secrets/gitlab_smtp_password.
+# Usage: docker compose -f compose.yaml -f compose.smtp.yaml up -d
+services:
+  gitlab:
+    environment:
+      GITLAB_SMTP_ENABLED: "true"
+      GITLAB_SMTP_HOST: ${GITLAB_SMTP_HOST}
+      GITLAB_SMTP_PORT: ${GITLAB_SMTP_PORT:-587}
+      GITLAB_SMTP_USER: ${GITLAB_SMTP_USER}
+      GITLAB_SMTP_SECURITY: ${GITLAB_SMTP_SECURITY:-starttls}
+      GITLAB_EMAIL_FROM: ${GITLAB_EMAIL_FROM}
+    secrets: [gitlab_smtp_password]
+
+secrets:
+  gitlab_smtp_password:
+    file: ./secrets/gitlab_smtp_password

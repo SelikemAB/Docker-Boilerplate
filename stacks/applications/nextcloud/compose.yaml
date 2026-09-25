@@ -1,0 +1,195 @@
+# Nextcloud — hardened file sync & collaboration platform
+# Docs: https://github.com/nextcloud/docker, https://docs.nextcloud.com/server/latest/admin_manual/
+# - Apache image with PostgreSQL, Redis (password-protected) and a dedicated cron container
+# - Admin, DB and Redis credentials via Docker secrets (*_FILE, supported by the image)
+# - DB and Redis non-root with read-only root FS on an internal network; web via Traefik only
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+# Environment shared by the web and cron containers (both load config/redis.config.php).
+x-nextcloud-env: &nextcloud-env
+  TZ: ${TZ:-UTC}
+  POSTGRES_HOST: db
+  POSTGRES_DB: ${POSTGRES_DB:-nextcloud}
+  POSTGRES_USER: ${POSTGRES_USER:-nextcloud}
+  POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+  REDIS_HOST: redis
+  REDIS_HOST_PORT: "6379"
+  REDIS_HOST_PASSWORD_FILE: /run/secrets/redis_password
+
+services:
+  app:
+    <<: *hardening
+    image: docker.io/library/nextcloud:35.0.1-apache
+    container_name: nextcloud-app
+    # The entrypoint installs/upgrades as root (rsync --chown) and Apache drops to www-data.
+    cap_add:
+      - CHOWN             # rsync --chown of the code into /var/www/html
+      - DAC_OVERRIDE      # entrypoint touches files owned by www-data while running as root
+      - FOWNER            # chmod/utime on www-data owned files during install/upgrade
+      - SETUID            # su/Apache switch to www-data
+      - SETGID            # su/Apache switch to www-data
+      - NET_BIND_SERVICE  # Apache binds :80 as root before dropping privileges
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      <<: *nextcloud-env
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:-admin}
+      NEXTCLOUD_ADMIN_PASSWORD_FILE: /run/secrets/nextcloud_admin_password
+      NEXTCLOUD_TRUSTED_DOMAINS: ${NEXTCLOUD_HOST}
+      # Reverse-proxy awareness (TLS terminates at Traefik).
+      TRUSTED_PROXIES: ${NEXTCLOUD_TRUSTED_PROXIES:-172.16.0.0/12 10.0.0.0/8 192.168.0.0/16}
+      OVERWRITEHOST: ${NEXTCLOUD_HOST}
+      OVERWRITEPROTOCOL: https
+      OVERWRITECLIURL: https://${NEXTCLOUD_HOST}
+      PHP_MEMORY_LIMIT: ${PHP_MEMORY_LIMIT:-1024M}
+      PHP_UPLOAD_LIMIT: ${PHP_UPLOAD_LIMIT:-16G}
+      APACHE_BODY_LIMIT: "0"
+    secrets: [nextcloud_admin_password, postgres_password, redis_password]
+    volumes:
+      - nextcloud-html:/var/www/html
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${PROXY_NETWORK:-proxy}
+      traefik.http.routers.nextcloud.rule: Host(`${NEXTCLOUD_HOST}`)
+      traefik.http.routers.nextcloud.entrypoints: websecure
+      traefik.http.routers.nextcloud.middlewares: nextcloud-dav@docker
+      traefik.http.services.nextcloud.loadbalancer.server.port: "80"
+      # CalDAV/CardDAV service discovery.
+      traefik.http.middlewares.nextcloud-dav.redirectregex.regex: "^https://([^/]+)/\\.well-known/(card|cal)dav"
+      traefik.http.middlewares.nextcloud-dav.redirectregex.replacement: "https://$${1}/remote.php/dav/"
+      traefik.http.middlewares.nextcloud-dav.redirectregex.permanent: "true"
+    # proxy: Traefik ingress + egress (app store, federation, update checks). backend: DB/Redis.
+    networks: [proxy, backend]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost/status.php || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # First start copies the code and runs the installer.
+      start_period: 300s
+    pids_limit: 500
+    deploy:
+      resources:
+        limits: { cpus: "${NEXTCLOUD_CPUS:-2.0}", memory: "${NEXTCLOUD_MEMORY:-2G}" }
+
+  cron:
+    <<: *hardening
+    image: docker.io/library/nextcloud:35.0.1-apache
+    container_name: nextcloud-cron
+    # /cron.sh runs busybox crond as root; crond executes www-data's crontab (cron.php every 5 min).
+    entrypoint: /cron.sh
+    cap_add:
+      - SETUID  # crond switches to www-data for the job
+      - SETGID  # crond switches to www-data for the job
+    depends_on:
+      app: { condition: service_healthy }
+    environment:
+      <<: *nextcloud-env
+    secrets: [postgres_password, redis_password]
+    volumes:
+      - nextcloud-html:/var/www/html
+    # proxy for egress (background jobs fetch feeds, app updates, federated shares).
+    networks: [proxy, backend]
+    healthcheck:
+      test: ["CMD-SHELL", "grep -qa crond /proc/1/cmdline || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    pids_limit: 200
+    deploy:
+      resources:
+        limits: { cpus: "${NEXTCLOUD_CRON_CPUS:-1.0}", memory: "${NEXTCLOUD_CRON_MEMORY:-1G}" }
+
+  db:
+    <<: *hardening
+    image: docker.io/library/postgres:18.6-alpine
+    container_name: nextcloud-db
+    user: "70:70"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    shm_size: ${POSTGRES_SHM_SIZE:-256m}
+    environment:
+      TZ: ${TZ:-UTC}
+      POSTGRES_USER: ${POSTGRES_USER:-nextcloud}
+      POSTGRES_DB: ${POSTGRES_DB:-nextcloud}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256 --data-checksums"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    secrets: [postgres_password]
+    volumes:
+      - nextcloud-db:/var/lib/postgresql
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${POSTGRES_CPUS:-2.0}", memory: "${POSTGRES_MEMORY:-2G}" }
+
+  redis:
+    <<: *hardening
+    image: docker.io/library/redis:8.10.2-alpine
+    container_name: nextcloud-redis
+    user: "999:1000"  # redis:redis in the Alpine image
+    read_only: true
+    tmpfs: [/tmp]
+    # Password is written to a tmpfs config file so it doesn't show up in the process list.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        umask 077
+        printf 'requirepass "%s"\n' "$$(cat /run/secrets/redis_password)" > /tmp/redis.conf
+        exec redis-server /tmp/redis.conf --appendonly yes --protected-mode yes
+    secrets: [redis_password]
+    volumes:
+      - nextcloud-redis:/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/redis_password)\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    pids_limit: 100
+    deploy:
+      resources:
+        limits: { cpus: "${REDIS_CPUS:-0.5}", memory: "${REDIS_MEMORY:-512M}" }
+
+secrets:
+  nextcloud_admin_password:
+    file: ./secrets/nextcloud_admin_password
+  postgres_password:
+    file: ./secrets/postgres_password
+  redis_password:
+    file: ./secrets/redis_password
+
+volumes:
+  nextcloud-html:
+  nextcloud-db:
+  nextcloud-redis:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  backend:
+    internal: true

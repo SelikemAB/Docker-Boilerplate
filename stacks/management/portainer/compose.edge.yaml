@@ -1,0 +1,8 @@
+# Optional: Portainer Edge-agent tunnel server (TCP 8000).
+# Usage: docker compose -f compose.yaml -f compose.edge.yaml up -d
+# Only needed when you manage remote hosts with Portainer Edge Agents.
+services:
+  portainer:
+    ports:
+      # HARDENING-EXCEPTION: port — Edge Agents on remote hosts must reach the tunnel server; restrict EDGE_BIND_ADDRESS / firewall to the agents' networks.
+      - "${EDGE_BIND_ADDRESS:-0.0.0.0}:${PORTAINER_EDGE_PORT:-8000}:8000"

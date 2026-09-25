@@ -1,0 +1,25 @@
+# Optional: give BIND its own IP address on the LAN (macvlan).
+#   docker compose -f compose.yaml -f compose.macvlan.yaml up -d
+# Clients query <MACVLAN_IPV4_ADDRESS>:53 directly, so named listens on 53 inside the container.
+# Note: the Docker host itself cannot reach a macvlan address without a macvlan shim interface.
+
+services:
+  bind9:
+    sysctls:
+      # Lets the non-root `bind` user bind port 53 in its own network namespace (no capability needed).
+      net.ipv4.ip_unprivileged_port_start: "53"
+    volumes:
+      - ./config/named.conf.listen-53:/etc/bind/named.conf.listen:ro
+    networks:
+      lan:
+        ipv4_address: ${MACVLAN_IPV4_ADDRESS:?set MACVLAN_IPV4_ADDRESS in .env}
+
+networks:
+  lan:
+    driver: macvlan
+    driver_opts:
+      parent: ${MACVLAN_PARENT:-eth0}
+    ipam:
+      config:
+        - subnet: ${MACVLAN_SUBNET:?set MACVLAN_SUBNET in .env}
+          gateway: ${MACVLAN_GATEWAY:?set MACVLAN_GATEWAY in .env}

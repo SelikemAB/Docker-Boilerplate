@@ -1,0 +1,12 @@
+# Static site served from /srv (CADDY_SITE_PATH on the host, mounted read-only).
+# Caddy obtains and renews a certificate for the address automatically.
+{$CADDY_SITE_ADDRESS:localhost} {
+	import security
+	encode zstd gzip
+	root * /srv
+	file_server
+	log {
+		output stdout
+		format json
+	}
+}

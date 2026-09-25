@@ -1,0 +1,28 @@
+# Optional: outgoing e-mail (password recovery, notifications, enrollment).
+# Usage: docker compose -f compose.yaml -f compose.smtp.yaml up -d
+# Requires ./secrets/smtp_password (see README).
+
+x-smtp-env: &smtp-env
+  AUTHENTIK_EMAIL__HOST: ${SMTP_HOST:-smtp.example.com}
+  AUTHENTIK_EMAIL__PORT: ${SMTP_PORT:-587}
+  AUTHENTIK_EMAIL__USERNAME: ${SMTP_USERNAME:-}
+  AUTHENTIK_EMAIL__PASSWORD: file:///run/secrets/smtp_password
+  AUTHENTIK_EMAIL__FROM: ${SMTP_FROM:-authentik@example.com}
+  # STARTTLS on 587 (default). For implicit TLS on 465 set SMTP_USE_TLS=false, SMTP_USE_SSL=true.
+  AUTHENTIK_EMAIL__USE_TLS: ${SMTP_USE_TLS:-true}
+  AUTHENTIK_EMAIL__USE_SSL: ${SMTP_USE_SSL:-false}
+  AUTHENTIK_EMAIL__TIMEOUT: "10"
+
+services:
+  server:
+    environment:
+      <<: *smtp-env
+    secrets: [smtp_password]
+  worker:
+    environment:
+      <<: *smtp-env
+    secrets: [smtp_password]
+
+secrets:
+  smtp_password:
+    file: ./secrets/smtp_password

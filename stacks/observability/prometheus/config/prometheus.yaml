@@ -1,0 +1,34 @@
+# Prometheus configuration. Mounted read-only; restart the container after changes
+# (docker compose restart prometheus).
+global:
+  scrape_interval: 15s  # By default, scrape targets every 15 seconds.
+
+  # Attach these labels to any time series or alerts when communicating with
+  # external systems (federation, remote storage, Alertmanager).
+  # external_labels:
+  #   monitor: 'codelab-monitor'
+
+scrape_configs:
+  # Prometheus itself.
+  - job_name: 'prometheus'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Traefik metrics (traefik stack, entrypoint :9100). Prometheus shares the proxy network.
+  # - job_name: 'traefik'
+  #   static_configs:
+  #     - targets: ['traefik:9100']
+
+  # Example job for node_exporter
+  # - job_name: 'node_exporter'
+  #   static_configs:
+  #     - targets: ['node_exporter:9100']
+
+  # Example job for cadvisor
+  # - job_name: 'cadvisor'
+  #   static_configs:
+  #     - targets: ['cadvisor:8080']
+
+# Host and container metrics from the alloy stack arrive via remote write
+# (--web.enable-remote-write-receiver) and need no scrape job here.

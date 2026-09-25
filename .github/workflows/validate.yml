@@ -1,0 +1,77 @@
+name: Validate stacks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Hardening lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install pyyaml==6.0.3
+      - run: python scripts/lint.py
+      - name: Catalogue and VERSIONS.md are up to date
+        run: python scripts/catalog.py --check
+
+  compose-config:
+    name: docker compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Render every stack with its example environment
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r file; do
+            dir=$(dirname "$file")
+            # Provide dummy secret files so compose can resolve `secrets:` paths.
+            if grep -q '^secrets:' "$dir"/compose*.yaml 2>/dev/null; then
+              mkdir -p "$dir/secrets"
+              grep -hoE 'file: *\./secrets/[^[:space:]]+' "$dir"/compose*.yaml | awk '{print $2}' \
+                | while read -r s; do [ -e "$dir/$s" ] || echo dummy > "$dir/$s"; done
+            fi
+            if head -3 "$file" | grep -q STANDALONE; then
+              files=(-f "$file")                      # standalone variant, used on its own
+            else
+              files=(-f "$dir/compose.yaml")
+              [ "$file" != "$dir/compose.yaml" ] && files+=(-f "$file")
+            fi
+            if ! docker compose --project-directory "$dir" --env-file "$dir/.env.example" "${files[@]}" config --quiet; then
+              echo "::error file=$file::docker compose config failed"
+              fail=1
+            fi
+          done < <(find stacks -name 'compose*.yaml' | sort)
+          exit $fail
+
+  yamllint:
+    name: YAML syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: pip install yamllint==1.37.1
+      - run: yamllint -d '{extends: relaxed, rules: {line-length: disable, truthy: disable}}' stacks renovate.json
+
+  secrets-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,133 @@
+# Grafana — hardened dashboards and alerting, backed by PostgreSQL
+# Docs: https://grafana.com/docs/grafana/latest/setup-grafana/installation/docker/
+# - Non-root (UID 472), no capabilities, read-only root FS
+# - Admin password, secret key and DB password via Docker secrets (GF_*__FILE)
+# - PostgreSQL on an internal network; UI via Traefik; queries Prometheus/Loki on "monitoring"
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  grafana:
+    <<: *hardening
+    image: docker.io/grafana/grafana:13.2.2
+    container_name: ${CONTAINER_NAME:-grafana}
+    user: "472:0"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/log/grafana
+    depends_on:
+      grafana-db: { condition: service_healthy }
+    environment:
+      TZ: ${TZ:-UTC}
+      GF_SERVER_ROOT_URL: https://${GRAFANA_HOST}
+      GF_LOG_MODE: console
+      GF_LOG_LEVEL: ${GRAFANA_LOG_LEVEL:-info}
+      # Database
+      GF_DATABASE_TYPE: postgres
+      GF_DATABASE_HOST: grafana-db:5432
+      GF_DATABASE_NAME: ${GRAFANA_DB_NAME:-grafana}
+      GF_DATABASE_USER: ${GRAFANA_DB_USER:-grafana}
+      GF_DATABASE_PASSWORD__FILE: /run/secrets/grafana_db_password
+      # Traffic stays on the internal backend network.
+      GF_DATABASE_SSL_MODE: disable
+      # Security
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_SECURITY_SECRET_KEY__FILE: /run/secrets/grafana_secret_key
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_COOKIE_SAMESITE: lax
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_ALLOW_ORG_CREATE: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SNAPSHOTS_EXTERNAL_ENABLED: "false"
+      # Privacy
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    secrets: [grafana_admin_password, grafana_secret_key, grafana_db_password]
+    volumes:
+      - grafana-data:/var/lib/grafana
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.grafana.rule: Host(`${GRAFANA_HOST}`)
+      traefik.http.routers.grafana.entrypoints: websecure
+      traefik.http.services.grafana.loadbalancer.server.port: "3000"
+    # proxy: Traefik + outbound (plugins, alert notifications); monitoring: data sources.
+    networks: [proxy, monitoring, backend]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${GRAFANA_CPUS:-1.0}", memory: "${GRAFANA_MEMORY:-1G}" }
+
+  grafana-db:
+    <<: *hardening
+    image: docker.io/library/postgres:18.6-alpine
+    container_name: ${CONTAINER_NAME:-grafana}-db
+    user: "70:70"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    shm_size: 128m
+    environment:
+      TZ: ${TZ:-UTC}
+      POSTGRES_USER: ${GRAFANA_DB_USER:-grafana}
+      POSTGRES_DB: ${GRAFANA_DB_NAME:-grafana}
+      POSTGRES_PASSWORD_FILE: /run/secrets/grafana_db_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256 --data-checksums"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    secrets: [grafana_db_password]
+    volumes:
+      - grafana-db:/var/lib/postgresql
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    pids_limit: 200
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+secrets:
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password
+  grafana_secret_key:
+    file: ./secrets/grafana_secret_key
+  grafana_db_password:
+    file: ./secrets/grafana_db_password
+
+volumes:
+  grafana-data:
+  grafana-db:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  # Shared observability network (Prometheus, Loki, InfluxDB).
+  monitoring:
+    name: ${MONITORING_NETWORK:-monitoring}
+    external: true
+  backend:
+    internal: true

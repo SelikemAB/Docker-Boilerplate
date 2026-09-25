@@ -1,0 +1,74 @@
+# AdGuard Home seed configuration (schema 34, AdGuard Home v0.107.79).
+# The init-config job renders this file to /opt/adguardhome/conf/AdGuardHome.yaml ONLY when no
+# configuration exists yet (first start). Afterwards AdGuard Home owns the file and rewrites it
+# whenever settings change in the UI. Keys that are not listed here keep their built-in defaults.
+#
+# __PLACEHOLDERS__ are substituted by config/init-config.sh.
+http:
+  # Web UI and plain-HTTP DNS-over-HTTPS endpoint. Traefik terminates TLS in front of it.
+  address: __HTTP_ADDRESS__
+  session_ttl: 720h
+  pprof:
+    enabled: false
+    port: 6060
+  doh:
+    routes:
+      - GET /dns-query
+      - POST /dns-query
+      - GET /dns-query/{ClientID}
+      - POST /dns-query/{ClientID}
+    # Required behind a TLS-terminating reverse proxy: newer AdGuard Home releases refuse DoH over
+    # plain HTTP unless this is set. This is the schema-34 successor of `tls.allow_unencrypted_doh`
+    # (older configs are migrated automatically).
+    insecure_enabled: true
+users:
+  - name: '__ADMIN_USER__'
+    password: '__ADMIN_HASH__'
+auth_attempts: 5
+block_auth_min: 15
+dns:
+  bind_hosts:
+    - 0.0.0.0
+  # Unprivileged port inside the container; the host maps 53 -> 5053.
+  port: __DNS_PORT__
+  anonymize_client_ip: false
+  ratelimit: 20
+  refuse_any: true
+  upstream_dns:
+    - https://dns.quad9.net/dns-query
+    - https://cloudflare-dns.com/dns-query
+  bootstrap_dns:
+    - 9.9.9.9
+    - 149.112.112.112
+    - 1.1.1.1
+  upstream_mode: load_balance
+  enable_dnssec: true
+  cache_enabled: true
+  # Only these sources may set X-Forwarded-For / PROXY headers (loopback + Docker bridge pools,
+  # i.e. Traefik on the proxy network). The web port itself is not published.
+  trusted_proxies:
+    - 127.0.0.0/8
+    - ::1/128
+    - 172.16.0.0/12
+  serve_plain_dns: true
+  hostsfile_enabled: true
+tls:
+  # Encrypted DNS (DoT/DoQ/DNSCrypt) is off until you add a certificate in the UI.
+  # HTTPS for the UI is handled by Traefik, so AdGuard's own HTTPS listener stays disabled (0).
+  enabled: false
+  port_https: 0
+  port_dns_over_tls: 8853
+  port_dns_over_quic: 8853
+  port_dnscrypt: 0
+querylog:
+  enabled: true
+  file_enabled: true
+  interval: 720h
+  size_memory: 1000
+statistics:
+  enabled: true
+  interval: 24h
+log:
+  file: ""
+  verbose: false
+schema_version: 34

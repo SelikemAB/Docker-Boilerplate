@@ -1,0 +1,81 @@
+# InfluxDB 2 — hardened time-series database
+# Docs: https://hub.docker.com/_/influxdb
+# - Non-root (influxdb UID 1000), no capabilities, read-only root FS
+# - Initial admin password and API token via Docker secrets (DOCKER_INFLUXDB_INIT_*_FILE)
+# - No published ports: UI/API via Traefik, writers/readers on the internal monitoring network
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging: *logging
+
+services:
+  influxdb:
+    <<: *hardening
+    image: docker.io/library/influxdb:2.9.1-alpine
+    container_name: ${CONTAINER_NAME:-influxdb}
+    # Image directories are owned by influxdb (1000:1000); the entrypoint only drops privileges
+    # via su-exec when started as root, so starting as 1000 directly is supported.
+    user: "1000:1000"
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      TZ: ${TZ:-UTC}
+      # First-start setup (ignored once the bolt DB exists).
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_INIT_USERNAME:-admin}
+      DOCKER_INFLUXDB_INIT_PASSWORD_FILE: /run/secrets/influxdb_admin_password
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN_FILE: /run/secrets/influxdb_admin_token
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_INIT_ORG:-example}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_INIT_BUCKET:-default}
+      DOCKER_INFLUXDB_INIT_RETENTION: ${INFLUXDB_INIT_RETENTION:-}
+      # Runtime hardening
+      INFLUXD_REPORTING_DISABLED: "true"
+      INFLUXD_LOG_LEVEL: ${INFLUXDB_LOG_LEVEL:-info}
+    secrets: [influxdb_admin_password, influxdb_admin_token]
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.influxdb.rule: Host(`${INFLUXDB_HOST}`)
+      traefik.http.routers.influxdb.entrypoints: websecure
+      # Database UI/API: restricted to private ranges by default (see README).
+      traefik.http.routers.influxdb.middlewares: internal-only@file
+      traefik.http.services.influxdb.loadbalancer.server.port: "8086"
+    networks: [proxy, monitoring]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8086/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    stop_grace_period: 60s
+    pids_limit: 300
+    deploy:
+      resources:
+        limits: { cpus: "${INFLUXDB_CPUS:-2.0}", memory: "${INFLUXDB_MEMORY:-2G}" }
+
+secrets:
+  influxdb_admin_password:
+    file: ./secrets/influxdb_admin_password
+  influxdb_admin_token:
+    file: ./secrets/influxdb_admin_token
+
+volumes:
+  influxdb-data:
+  influxdb-config:
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:-proxy}
+    external: true
+  # Shared observability network (Grafana, Telegraf, ...).
+  monitoring:
+    name: ${MONITORING_NETWORK:-monitoring}
+    external: true
