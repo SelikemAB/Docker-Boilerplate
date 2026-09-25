@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Render every stack with its example environment
         run: |
-          set -uo pipefail
+          set +e -uo pipefail   # keep going on failures; errors are collected below
           : > /tmp/errors.txt
           while IFS= read -r file; do
             dir=$(dirname "$file")
@@ -42,7 +42,7 @@ jobs:
             env_file=$(mktemp)
             cp "$dir/.env.example" "$env_file"
             grep -hoE '\$\{[A-Z0-9_]+:\?' "$dir"/compose*.yaml | sed -E 's/\$\{([A-Z0-9_]+):\?/\1/' | sort -u \
-              | while read -r v; do grep -qE "^$v=.+" "$env_file" || echo "$v=ci-placeholder" >> "$env_file"; done
+              | while read -r v; do grep -qE "^$v=.+" "$env_file" || echo "$v=ci-placeholder" >> "$env_file"; done || true
             # Provide dummy secret files so compose can resolve `secrets:` paths.
             if grep -q '^secrets:' "$dir"/compose*.yaml 2>/dev/null; then
               mkdir -p "$dir/secrets"
