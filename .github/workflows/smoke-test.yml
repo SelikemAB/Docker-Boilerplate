@@ -1,0 +1,85 @@
+name: Smoke test stacks
+
+# Starts every stack on a fresh Docker host and waits for all services to be healthy.
+# Runs on demand, weekly (to catch upstream image regressions), and for PRs that touch
+# stacks (only the changed stacks).
+on:
+  workflow_dispatch:
+    inputs:
+      stacks:
+        description: "Space-separated stack paths (empty = all), e.g. stacks/observability/grafana"
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 4 * * 1"
+  pull_request:
+    paths: ["stacks/**", "scripts/smoke-test.sh", ".github/workflows/smoke-test.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      stacks: ${{ steps.list.outputs.stacks }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: list
+        env:
+          INPUT_STACKS: ${{ github.event.inputs.stacks }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          all=$(find stacks -name compose.yaml -printf '%h\n' | sort)
+          if [ -n "${INPUT_STACKS:-}" ]; then
+            sel=$(printf '%s\n' $INPUT_STACKS)
+          elif [ -n "${BASE_SHA:-}" ] && ! git diff --name-only "$BASE_SHA" HEAD | grep -qvE '^stacks/'; then
+            # PR touching only stacks: test just the changed ones
+            sel=$(git diff --name-only "$BASE_SHA" HEAD | grep -oE '^stacks/[^/]+/[^/]+' | sort -u)
+          else
+            sel="$all"
+          fi
+          sel=$(comm -12 <(echo "$all") <(echo "$sel" | sort -u))
+          echo "stacks=$(echo "$sel" | jq -R . | jq -sc 'map(select(length>0))')" >> "$GITHUB_OUTPUT"
+          echo "$sel"
+
+  smoke:
+    needs: plan
+    if: needs.plan.outputs.stacks != '[]'
+    name: ${{ matrix.stack }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        stack: ${{ fromJSON(needs.plan.outputs.stacks) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Free port 53 for DNS stacks
+        if: startsWith(matrix.stack, 'stacks/dns/')
+        run: |
+          sudo systemctl stop systemd-resolved
+          echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf >/dev/null
+
+      - name: Create shared networks
+        run: |
+          docker network create proxy
+          docker network create database
+          docker network create --internal monitoring
+
+      - name: Smoke test
+        run: |
+          set +e
+          bash scripts/smoke-test.sh "${{ matrix.stack }}"
+          rc=$?
+          # 2 = external dependency: images pulled and containers started, health not asserted
+          [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ]
