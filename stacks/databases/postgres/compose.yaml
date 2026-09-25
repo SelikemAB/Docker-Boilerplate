@@ -69,6 +69,8 @@ volumes:
   postgres-data:
 
 networks:
-  # Other stacks can join this network to reach the DB without publishing ports.
+  # Shared with application stacks so they reach the DB without published ports.
+  # Create once per host: docker network create database
   database:
     name: ${DATABASE_NETWORK:-database}
+    external: true

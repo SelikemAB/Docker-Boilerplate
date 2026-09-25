@@ -10,6 +10,7 @@ A standalone PostgreSQL server for applications that need a shared database.
 ## Quick start
 
 ```bash
+docker network create database                  # once per host, shared with app stacks
 cp .env.example .env
 mkdir -p secrets && chmod 700 secrets
 openssl rand -base64 32 | tr -d '\n' > secrets/postgres_password

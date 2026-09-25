@@ -72,11 +72,15 @@ fi
 
 if [ -n "${EXTERNAL[$name]:-}" ]; then
   log "External dependency: ${EXTERNAL[$name]}. Checking that containers start"
-  compose up -d --no-build
+  compose up -d --no-build 2>&1 | tee /tmp/up.log
   sleep 20
   compose ps -a
   if compose ps -a --format '{{.State}}' | grep -qE 'created|dead'; then
-    echo "::error title=$name::containers failed to start"
+    details="$(tail -8 /tmp/up.log)"$'
+'"$(compose ps -a --format '{{.Service}}: {{.State}} exit={{.ExitCode}}')"$'
+'"$(compose logs --no-color --tail 15 2>&1 | cut -c1-240)"
+    echo "::error title=$name::containers failed to start%0A$(printf '%s' "$details" | tail -c 3000 | sed ':a;N;$!ba;s/%/%25/g;s///g;s/
+/%0A/g')"
     exit 1
   fi
   echo "::notice title=$name::images pulled and containers started; health not asserted (${EXTERNAL[$name]})"
@@ -84,7 +88,7 @@ if [ -n "${EXTERNAL[$name]:-}" ]; then
 fi
 
 log "Starting (timeout ${timeout}s)"
-if compose up -d --wait --wait-timeout "$timeout"; then
+if compose up -d --wait --wait-timeout "$timeout" 2>&1 | tee /tmp/up.log; [ "${PIPESTATUS[0]}" -eq 0 ]; then
   compose ps -a
   log "PASS: $name is healthy"
   exit 0
@@ -92,13 +96,19 @@ fi
 
 log "FAIL: $name did not become healthy"
 compose ps -a
-summary=""
-for svc in $(compose ps -a --format '{{.Service}} {{.State}} {{.Health}}' | awk '$2!="running" || ($3!="" && $3!="healthy") {print $1}'); do
+summary="[compose up] $(grep -vE '^\s*(Container|Network|Volume) .*(Creat|Start|Wait|Healthy|Exited|Running)' /tmp/up.log | tail -8)"$'\n'
+# Everything that is not running-and-healthy, except one-shot jobs that completed successfully.
+bad=$(compose ps -a --format '{{.Service}} {{.State}} {{.Health}} {{.ExitCode}}' \
+  | awk '!($2=="exited" && $4=="0") && ($2!="running" || ($3!="" && $3!="healthy")) {print $1}')
+for svc in $bad; do
   state=$(compose ps -a "$svc" --format '{{.State}} {{.Health}} exit={{.ExitCode}}')
-  logs=$(compose logs --no-color --tail 25 "$svc" 2>&1 | cut -c1-240)
+  all=$(compose logs --no-color "$svc" 2>&1 | cut -c1-240)
+  # Key error lines from the whole log, then the tail.
+  logs=$(printf '%s\n' "$all" | grep -iE 'error|fatal|panic|denied|not permitted|refused|invalid|cannot|failed|no such' | head -15
+         echo '  ...'
+         printf '%s\n' "$all" | tail -12)
   printf '\n--- %s (%s) ---\n%s\n' "$svc" "$state" "$logs"
   summary+="[$svc: $state]"$'\n'"$logs"$'\n'
 done
-[ -z "$summary" ] && summary=$(compose logs --no-color --tail 40 2>&1 | cut -c1-240)
 echo "::error title=$name::$(printf '%s' "$summary" | tail -c 3500 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')"
 exit 1

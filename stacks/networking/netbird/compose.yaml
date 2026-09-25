@@ -49,8 +49,10 @@ services:
       traefik.http.services.netbird-server-h2c.loadbalancer.server.scheme: h2c
     networks: [proxy]
     healthcheck:
-      # Ubuntu base without curl/wget: probe the /health endpoint (:9000) with bash /dev/tcp.
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200'"]
+      # Ubuntu base without curl/wget: talk HTTP to the local management listener with bash
+      # /dev/tcp. Any HTTP status line means it is serving. (/health on :9000 also dials the
+      # public relay URL, so it fails behind hairpin NAT or before DNS/TLS are in place.)
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /api/users HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q '^HTTP/'"]
       interval: 30s
       timeout: 5s
       retries: 3
