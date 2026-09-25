@@ -113,8 +113,9 @@ services:
         limits: { cpus: "${ARCANE_CPUS:-1.0}", memory: "${ARCANE_MEMORY:-1G}", pids: 500 }
 
   # One-shot helper: make the data volumes writable by the non-root manager (65532).
+  # Uses Alpine because the manager image has no shell.
   init-perms:
-    image: ghcr.io/getarcaneapp/manager:v2.13.1
+    image: docker.io/library/alpine:3.24.2
     restart: "no"
     user: "0:0"
     entrypoint: ["sh", "-c", "chown -R 65532:65532 /app/data /builds"]

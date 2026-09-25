@@ -77,7 +77,7 @@ services:
     entrypoint: ["sh", "-c", "chown 12021:0 /db /logs && chmod 770 /db /logs"]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
-    cap_add: [CHOWN]  # needed only to chown the volume roots
+    cap_add: [CHOWN, FOWNER]  # chown the volume roots, then chmod them
     network_mode: none
     volumes:
       - renovate-db:/db

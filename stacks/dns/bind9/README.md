@@ -16,6 +16,9 @@ mkdir -p secrets && chmod 700 secrets
 # TSIG key (HMAC-SHA256, 256-bit). The key name must stay "tsig-transfer-key".
 printf 'key "tsig-transfer-key" {\n    algorithm hmac-sha256;\n    secret "%s";\n};\n' \
   "$(openssl rand -base64 32)" > secrets/bind_tsig_key
+# Separate control-channel key for rndc (loopback only). The key name must stay "rndc-key".
+printf 'key "rndc-key" {\n    algorithm hmac-sha256;\n    secret "%s";\n};\n' \
+  "$(openssl rand -base64 32)" > secrets/bind_rndc_key
 chmod 444 secrets/*                             # readable by the non-root bind user; dir stays 700
 docker compose up -d
 dig @127.0.0.1 ns1.home.arpa                    # test
@@ -61,7 +64,11 @@ If port 53 is taken on the host (`systemd-resolved`), set `DNSStubListener=no` i
   Docker secret that is included directly from `/run/secrets`.
 - DNSSEC: validation of upstream answers (`dnssec-validation auto`) and automatic signing of the
   primary zone (`dnssec-policy default`). Keys are stored in the `bind9-cache` volume.
-- Version, hostname and server ID are hidden. No rndc control channel is opened (`controls { };`).
+- Version, hostname and server ID are hidden. The rndc control channel listens on `127.0.0.1:953`
+  inside the container only, authenticated with its own key (`secrets/bind_rndc_key`). The
+  healthcheck uses it (`rndc status`) because the minimal Ubuntu image has no shell or `dig`.
+- `named` runs directly as UID 9970 (`bind`), bypassing the image's pebble supervisor, which
+  would need a writable root filesystem.
   The image has no `dig`, so the healthcheck only checks that named accepts TCP on its DNS port.
 - **Exception (port):** DNS binds `0.0.0.0:53` by default, because that is the purpose of a DNS
   server. Set `DNS_BIND_ADDRESS` to restrict it.
@@ -73,7 +80,7 @@ If port 53 is taken on the host (`systemd-resolved`), set `DNSStubListener=no` i
 
 ## Backup
 
-Back up `secrets/bind_tsig_key` (in your secret manager) and the two volumes. `bind9-zones` holds
+Back up `secrets/bind_tsig_key` and `secrets/bind_rndc_key` (in your secret manager) and the two volumes. `bind9-zones` holds
 zone files and journals. `bind9-cache` holds the DNSSEC keys, and losing them means a key
 rollover at the parent.
 

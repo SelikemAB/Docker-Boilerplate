@@ -119,7 +119,7 @@ services:
     entrypoint: ["sh", "-c", "chown -R 0:0 /var/lib/alloy/data && chmod 700 /var/lib/alloy/data"]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
-    cap_add: [CHOWN, FOWNER]  # only to take ownership of the volume
+    cap_add: [CHOWN, FOWNER, DAC_READ_SEARCH]  # enter the 0700 alloy-owned dir and take it over
     network_mode: none
     volumes: [alloy-data:/var/lib/alloy/data]
     logging: *logging

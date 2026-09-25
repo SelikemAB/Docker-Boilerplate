@@ -52,7 +52,9 @@ grep -hoE 'file: *\./secrets/[^[:space:]]+' "$stack/compose.yaml" | awk '{print 
         traefik/dashboard_users)            htpass admin "$(rand_hex 12)" > "$f" ;;
         adguardhome/adguard_admin)          htpass admin "$(rand_hex 12)" > "$f" ;;
         bind9/bind_tsig_key)                printf 'key "tsig-transfer-key" {\n    algorithm hmac-sha256;\n    secret "%s";\n};\n' "$(openssl rand -base64 32)" > "$f" ;;
+        bind9/bind_rndc_key)                printf 'key "rndc-key" {\n    algorithm hmac-sha256;\n    secret "%s";\n};\n' "$(openssl rand -base64 32)" > "$f" ;;
         infisical/infisical_encryption_key) rand_hex 16 > "$f" ;;
+        semaphoreui/semaphore_access_key_encryption) openssl rand -base64 32 | tr -d '\n' > "$f" ;;
         netbird/netbird_config.yaml)
           host=$(grep -E '^NETBIRD_HOST=' "$stack/.env" | cut -d= -f2-)
           sed -e "s|netbird.example.com|${host:-netbird.example.com}|g" \
@@ -79,7 +81,8 @@ if [ -n "${EXTERNAL[$name]:-}" ]; then
     details="$(tail -8 /tmp/up.log)"$'
 '"$(compose ps -a --format '{{.Service}}: {{.State}} exit={{.ExitCode}}')"$'
 '"$(compose logs --no-color --tail 15 2>&1 | cut -c1-240)"
-    echo "::error title=$name::containers failed to start%0A$(printf '%s' "$details" | tail -c 3000 | sed ':a;N;$!ba;s/%/%25/g;s///g;s/
+    echo "::error title=$name::containers failed to start%0A$(printf '%s' "$details" | tail -c 3000 | sed ':a;N;$!ba;s/%/%25/g;s/
+//g;s/
 /%0A/g')"
     exit 1
   fi

@@ -26,6 +26,19 @@ while read -r path; do
     echo "exists    $name"
     continue
   fi
+  # Secrets with a required format
+  case "$name" in
+    bind_tsig_key|bind_rndc_key)
+      keyname=$([ "$name" = bind_rndc_key ] && echo rndc-key || echo tsig-transfer-key)
+      printf 'key "%s" {\n    algorithm hmac-sha256;\n    secret "%s";\n};\n' "$keyname" "$(openssl rand -base64 32)" > "$file"
+      echo "generated $name"; continue ;;
+    semaphore_access_key_encryption)            # base64 of exactly 32 bytes (AES-256)
+      openssl rand -base64 32 | tr -d '\n' > "$file"; echo "generated $name"; continue ;;
+    infisical_encryption_key)                   # exactly 32 hex characters
+      openssl rand -hex 16 | tr -d '\n' > "$file"; echo "generated $name"; continue ;;
+    adguard_admin|dashboard_users|netbird_config.yaml)
+      missing_manual+=("$name"); continue ;;    # htpasswd / rendered config: see README
+  esac
   lower=$(echo "$name" | tr '[:upper:]' '[:lower:]')
   if [[ "$lower" =~ $manual_pattern ]] || ! [[ "$lower" =~ $generated_pattern ]]; then
     missing_manual+=("$name")
