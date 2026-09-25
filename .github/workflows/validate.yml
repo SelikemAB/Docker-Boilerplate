@@ -63,7 +63,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: pip install yamllint==1.37.1
-      - run: yamllint -d '{extends: relaxed, rules: {line-length: disable, truthy: disable}}' stacks renovate.json
+      - run: |
+          yamllint -d '{extends: relaxed, rules: {line-length: disable, truthy: disable}}' stacks renovate.json
 
   secrets-scan:
     name: Secret scan
