@@ -55,10 +55,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s  # first start runs migrations and loads the embedding model
-    pids_limit: 1024
     deploy:
       resources:
-        limits: { cpus: "${OPENWEBUI_CPUS:-2.0}", memory: "${OPENWEBUI_MEMORY:-4G}" }
+        limits: { cpus: "${OPENWEBUI_CPUS:-2.0}", memory: "${OPENWEBUI_MEMORY:-4G}", pids: 1024 }
 
 secrets:
   webui_secret_key:

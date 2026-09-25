@@ -62,10 +62,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    pids_limit: 100
     deploy:
       resources:
-        limits: { cpus: "0.25", memory: 64M }
+        limits: { cpus: "0.25", memory: 64M, pids: 100 }
 
   arcane-agent:
     <<: *hardening
@@ -99,10 +98,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${ARCANE_AGENT_CPUS:-0.5}", memory: "${ARCANE_AGENT_MEMORY:-512M}" }
+        limits: { cpus: "${ARCANE_AGENT_CPUS:-0.5}", memory: "${ARCANE_AGENT_MEMORY:-512M}", pids: 300 }
 
 secrets:
   arcane_agent_token:

@@ -71,10 +71,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${GRAFANA_CPUS:-1.0}", memory: "${GRAFANA_MEMORY:-1G}" }
+        limits: { cpus: "${GRAFANA_CPUS:-1.0}", memory: "${GRAFANA_MEMORY:-1G}", pids: 300 }
 
   grafana-db:
     <<: *hardening
@@ -104,10 +103,9 @@ services:
       retries: 5
       start_period: 30s
     stop_grace_period: 60s
-    pids_limit: 200
     deploy:
       resources:
-        limits: { cpus: "1.0", memory: 512M }
+        limits: { cpus: "1.0", memory: 512M, pids: 200 }
 
 secrets:
   grafana_admin_password:

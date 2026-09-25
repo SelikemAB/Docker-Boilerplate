@@ -41,10 +41,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    pids_limit: 100
     deploy:
       resources:
-        limits: { cpus: "0.25", memory: 64M }
+        limits: { cpus: "0.25", memory: 64M, pids: 100 }
 
   alloy:
     <<: *hardening
@@ -106,10 +105,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${ALLOY_CPUS:-1.0}", memory: "${ALLOY_MEMORY:-1G}" }
+        limits: { cpus: "${ALLOY_CPUS:-1.0}", memory: "${ALLOY_MEMORY:-1G}", pids: 300 }
 
 volumes:
   alloy-data:

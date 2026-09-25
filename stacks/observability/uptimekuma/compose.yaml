@@ -46,10 +46,9 @@ services:
       timeout: 30s
       retries: 5
       start_period: 180s
-    pids_limit: 500
     deploy:
       resources:
-        limits: { cpus: "${UPTIMEKUMA_CPUS:-1.0}", memory: "${UPTIMEKUMA_MEMORY:-1G}" }
+        limits: { cpus: "${UPTIMEKUMA_CPUS:-1.0}", memory: "${UPTIMEKUMA_MEMORY:-1G}", pids: 500 }
 
 volumes:
   uptimekuma-data:

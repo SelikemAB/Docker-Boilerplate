@@ -70,10 +70,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${PIHOLE_CPUS:-1.0}", memory: "${PIHOLE_MEMORY:-512M}" }
+        limits: { cpus: "${PIHOLE_CPUS:-1.0}", memory: "${PIHOLE_MEMORY:-512M}", pids: 300 }
 
 secrets:
   pihole_webpassword:

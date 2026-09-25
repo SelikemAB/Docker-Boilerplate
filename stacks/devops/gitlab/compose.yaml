@@ -76,10 +76,9 @@ services:
       retries: 5
       start_period: 10m
     # Puma, Sidekiq, Gitaly, PostgreSQL and Redis together use many threads.
-    pids_limit: 4096
     deploy:
       resources:
-        limits: { cpus: "${GITLAB_CPUS:-4.0}", memory: "${GITLAB_MEMORY:-8G}" }
+        limits: { cpus: "${GITLAB_CPUS:-4.0}", memory: "${GITLAB_MEMORY:-8G}", pids: 4096 }
 
 secrets:
   gitlab_root_password:

@@ -68,10 +68,9 @@ services:
       timeout: 30s
       retries: 3
       start_period: 120s
-    pids_limit: 400
     deploy:
       resources:
-        limits: { cpus: "${AUTHENTIK_SERVER_CPUS:-2.0}", memory: "${AUTHENTIK_SERVER_MEMORY:-1536M}" }
+        limits: { cpus: "${AUTHENTIK_SERVER_CPUS:-2.0}", memory: "${AUTHENTIK_SERVER_MEMORY:-1536M}", pids: 400 }
 
   worker:
     <<: *hardening
@@ -101,10 +100,9 @@ services:
       timeout: 30s
       retries: 3
       start_period: 120s
-    pids_limit: 400
     deploy:
       resources:
-        limits: { cpus: "${AUTHENTIK_WORKER_CPUS:-2.0}", memory: "${AUTHENTIK_WORKER_MEMORY:-1536M}" }
+        limits: { cpus: "${AUTHENTIK_WORKER_CPUS:-2.0}", memory: "${AUTHENTIK_WORKER_MEMORY:-1536M}", pids: 400 }
 
   postgres:
     <<: *hardening
@@ -134,10 +132,9 @@ services:
       retries: 5
       start_period: 30s
     stop_grace_period: 60s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-1G}" }
+        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-1G}", pids: 300 }
 
 secrets:
   authentik_secret_key:

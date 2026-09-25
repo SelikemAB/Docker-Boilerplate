@@ -79,11 +79,10 @@ services:
       start_period: 120s
     # Kestra waits up to 5 min for running tasks on shutdown.
     stop_grace_period: 6m
-    # JVM + worker threads (every thread counts against pids_limit).
-    pids_limit: 2048
+    # JVM + worker threads (every thread counts against the pids limit).
     deploy:
       resources:
-        limits: { cpus: "${KESTRA_CPUS:-2.0}", memory: "${KESTRA_MEMORY:-4G}" }
+        limits: { cpus: "${KESTRA_CPUS:-2.0}", memory: "${KESTRA_MEMORY:-4G}", pids: 2048 }
 
   # Relays a Unix socket in the shared volume to the filtered socket proxy.
   docker-socket:
@@ -108,10 +107,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
-    pids_limit: 200
     deploy:
       resources:
-        limits: { cpus: "0.25", memory: 64M }
+        limits: { cpus: "0.25", memory: 64M, pids: 200 }
 
   socket-proxy:
     <<: *hardening
@@ -150,10 +148,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    pids_limit: 100
     deploy:
       resources:
-        limits: { cpus: "0.25", memory: 64M }
+        limits: { cpus: "0.25", memory: 64M, pids: 100 }
 
   postgres:
     <<: *hardening
@@ -183,10 +180,9 @@ services:
       retries: 5
       start_period: 30s
     stop_grace_period: 60s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-2G}" }
+        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-2G}", pids: 300 }
 
   # One-shot helper: hands storage, the working directory and the socket volume to UID 1000.
   init-perms:
@@ -203,10 +199,9 @@ services:
       - /tmp/kestra-wd:/tmp/kestra-wd
       - kestra-docker-sock:/sock
     logging: *logging
-    pids_limit: 20
     deploy:
       resources:
-        limits: { cpus: "0.1", memory: 64M }
+        limits: { cpus: "0.1", memory: 64M, pids: 20 }
 
 secrets:
   kestra_db_password:

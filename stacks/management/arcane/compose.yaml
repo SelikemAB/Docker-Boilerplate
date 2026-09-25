@@ -62,10 +62,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    pids_limit: 100
     deploy:
       resources:
-        limits: { cpus: "0.25", memory: 64M }
+        limits: { cpus: "0.25", memory: 64M, pids: 100 }
 
   arcane:
     <<: *hardening
@@ -108,10 +107,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
-    pids_limit: 500
     deploy:
       resources:
-        limits: { cpus: "${ARCANE_CPUS:-1.0}", memory: "${ARCANE_MEMORY:-1G}" }
+        limits: { cpus: "${ARCANE_CPUS:-1.0}", memory: "${ARCANE_MEMORY:-1G}", pids: 500 }
 
 secrets:
   arcane_encryption_key:

@@ -77,10 +77,9 @@ services:
       retries: 5
       # First start copies the code and runs the installer.
       start_period: 300s
-    pids_limit: 500
     deploy:
       resources:
-        limits: { cpus: "${NEXTCLOUD_CPUS:-2.0}", memory: "${NEXTCLOUD_MEMORY:-2G}" }
+        limits: { cpus: "${NEXTCLOUD_CPUS:-2.0}", memory: "${NEXTCLOUD_MEMORY:-2G}", pids: 500 }
 
   cron:
     <<: *hardening
@@ -106,10 +105,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    pids_limit: 200
     deploy:
       resources:
-        limits: { cpus: "${NEXTCLOUD_CRON_CPUS:-1.0}", memory: "${NEXTCLOUD_CRON_MEMORY:-1G}" }
+        limits: { cpus: "${NEXTCLOUD_CRON_CPUS:-1.0}", memory: "${NEXTCLOUD_CRON_MEMORY:-1G}", pids: 200 }
 
   db:
     <<: *hardening
@@ -139,10 +137,9 @@ services:
       retries: 5
       start_period: 30s
     stop_grace_period: 60s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${POSTGRES_CPUS:-2.0}", memory: "${POSTGRES_MEMORY:-2G}" }
+        limits: { cpus: "${POSTGRES_CPUS:-2.0}", memory: "${POSTGRES_MEMORY:-2G}", pids: 300 }
 
   redis:
     <<: *hardening
@@ -169,10 +166,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    pids_limit: 100
     deploy:
       resources:
-        limits: { cpus: "${REDIS_CPUS:-0.5}", memory: "${REDIS_MEMORY:-512M}" }
+        limits: { cpus: "${REDIS_CPUS:-0.5}", memory: "${REDIS_MEMORY:-512M}", pids: 100 }
 
 secrets:
   nextcloud_admin_password:

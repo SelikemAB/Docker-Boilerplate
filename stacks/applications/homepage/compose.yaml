@@ -37,10 +37,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    pids_limit: 100
     deploy:
       resources:
-        limits: { cpus: "0.25", memory: 64M }
+        limits: { cpus: "0.25", memory: 64M, pids: 100 }
 
   homepage:
     <<: *hardening
@@ -93,10 +92,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    pids_limit: 200
     deploy:
       resources:
-        limits: { cpus: "${HOMEPAGE_CPUS:-1.0}", memory: "${HOMEPAGE_MEMORY:-512M}" }
+        limits: { cpus: "${HOMEPAGE_CPUS:-1.0}", memory: "${HOMEPAGE_MEMORY:-512M}", pids: 200 }
 
   # One-shot helper: makes the named volumes writable by the non-root Homepage user.
   init-perms:
@@ -112,10 +110,9 @@ services:
       - homepage-images:/app/public/images
       - homepage-icons:/app/public/icons
     logging: *logging
-    pids_limit: 20
     deploy:
       resources:
-        limits: { cpus: "0.1", memory: 32M }
+        limits: { cpus: "0.1", memory: 32M, pids: 20 }
 
 secrets:
   homepage_auth_secret:

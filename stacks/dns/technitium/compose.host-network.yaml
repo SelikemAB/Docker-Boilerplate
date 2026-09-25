@@ -55,10 +55,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${TECHNITIUM_CPUS:-1.0}", memory: "${TECHNITIUM_MEMORY:-1G}" }
+        limits: { cpus: "${TECHNITIUM_CPUS:-1.0}", memory: "${TECHNITIUM_MEMORY:-1G}", pids: 300 }
 
   init-perms:
     <<: *hardening
@@ -70,10 +69,9 @@ services:
     volumes:
       - technitium-config:/etc/dns
       - technitium-logs:/var/log/technitium/dns
-    pids_limit: 20
     deploy:
       resources:
-        limits: { cpus: "0.1", memory: 32M }
+        limits: { cpus: "0.1", memory: 32M, pids: 20 }
 
 secrets:
   technitium_admin_password:

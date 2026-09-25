@@ -72,10 +72,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
-    pids_limit: 500
     deploy:
       resources:
-        limits: { cpus: "${FORGEJO_CPUS:-2.0}", memory: "${FORGEJO_MEMORY:-2G}" }
+        limits: { cpus: "${FORGEJO_CPUS:-2.0}", memory: "${FORGEJO_MEMORY:-2G}", pids: 500 }
 
   postgres:
     <<: *hardening
@@ -105,10 +104,9 @@ services:
       retries: 5
       start_period: 30s
     stop_grace_period: 60s
-    pids_limit: 200
     deploy:
       resources:
-        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-1G}" }
+        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-1G}", pids: 200 }
 
 secrets:
   forgejo_db_password:

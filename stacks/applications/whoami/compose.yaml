@@ -33,10 +33,9 @@ services:
       traefik.http.services.whoami.loadbalancer.server.port: "8080"
     networks: [proxy]
     # HARDENING-EXCEPTION: healthcheck — scratch image with only the /whoami binary (no shell, wget or curl, no probe flag). Monitor GET /health externally instead.
-    pids_limit: 50
     deploy:
       resources:
-        limits: { cpus: "${WHOAMI_CPUS:-0.25}", memory: "${WHOAMI_MEMORY:-32M}" }
+        limits: { cpus: "${WHOAMI_CPUS:-0.25}", memory: "${WHOAMI_MEMORY:-32M}", pids: 50 }
 
 networks:
   proxy:

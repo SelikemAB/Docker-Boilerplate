@@ -48,10 +48,9 @@ services:
       retries: 3
       start_period: 300s
     stop_grace_period: 4m
-    pids_limit: 1024
     deploy:
       resources:
-        limits: { cpus: "${HA_CPUS:-2.0}", memory: "${HA_MEMORY:-2G}" }
+        limits: { cpus: "${HA_CPUS:-2.0}", memory: "${HA_MEMORY:-2G}", pids: 1024 }
 
   init-config:
     image: ghcr.io/home-assistant/home-assistant:2026.9.3
@@ -74,10 +73,9 @@ services:
       - homeassistant-config:/config
       - ./config/configuration.yaml:/seed/configuration.yaml:ro
     logging: *logging
-    pids_limit: 20
     deploy:
       resources:
-        limits: { cpus: "0.1", memory: 32M }
+        limits: { cpus: "0.1", memory: 32M, pids: 20 }
 
 volumes:
   homeassistant-config:

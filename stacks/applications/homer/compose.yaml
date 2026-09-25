@@ -46,10 +46,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    pids_limit: 50
     deploy:
       resources:
-        limits: { cpus: "${HOMER_CPUS:-0.25}", memory: "${HOMER_MEMORY:-64M}" }
+        limits: { cpus: "${HOMER_CPUS:-0.25}", memory: "${HOMER_MEMORY:-64M}", pids: 50 }
 
 networks:
   proxy:

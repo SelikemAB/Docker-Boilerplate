@@ -74,10 +74,9 @@ services:
       retries: 3
       start_period: 300s
     stop_grace_period: 60s
-    pids_limit: 2000
     deploy:
       resources:
-        limits: { cpus: "${CHECKMK_CPUS:-2.0}", memory: "${CHECKMK_MEMORY:-4G}" }
+        limits: { cpus: "${CHECKMK_CPUS:-2.0}", memory: "${CHECKMK_MEMORY:-4G}", pids: 2000 }
 
 secrets:
   cmk_password:

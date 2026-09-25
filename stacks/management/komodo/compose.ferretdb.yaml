@@ -54,10 +54,9 @@ services:
       retries: 5
       start_period: 30s
     stop_grace_period: 60s
-    pids_limit: 200
     deploy:
       resources:
-        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-1G}" }
+        limits: { cpus: "${POSTGRES_CPUS:-1.0}", memory: "${POSTGRES_MEMORY:-1G}", pids: 200 }
 
   komodo-ferretdb:
     <<: *hardening
@@ -81,10 +80,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    pids_limit: 200
     deploy:
       resources:
-        limits: { cpus: "${FERRETDB_CPUS:-0.5}", memory: "${FERRETDB_MEMORY:-512M}" }
+        limits: { cpus: "${FERRETDB_CPUS:-0.5}", memory: "${FERRETDB_MEMORY:-512M}", pids: 200 }
 
 volumes:
   komodo-postgres-data:

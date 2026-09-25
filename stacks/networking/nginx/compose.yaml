@@ -41,10 +41,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    pids_limit: 100
     deploy:
       resources:
-        limits: { cpus: "${NGINX_CPUS:-0.5}", memory: "${NGINX_MEMORY:-128M}" }
+        limits: { cpus: "${NGINX_CPUS:-0.5}", memory: "${NGINX_MEMORY:-128M}", pids: 100 }
 
 networks:
   proxy:

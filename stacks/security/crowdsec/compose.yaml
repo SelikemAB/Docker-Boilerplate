@@ -48,10 +48,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 120s
-    pids_limit: 300
     deploy:
       resources:
-        limits: { cpus: "${CROWDSEC_CPUS:-1.0}", memory: "${CROWDSEC_MEMORY:-1G}" }
+        limits: { cpus: "${CROWDSEC_CPUS:-1.0}", memory: "${CROWDSEC_MEMORY:-1G}", pids: 300 }
 
 secrets:
   bouncer_key_traefik:

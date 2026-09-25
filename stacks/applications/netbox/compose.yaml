@@ -89,10 +89,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 180s  # first start runs all DB migrations
-    pids_limit: 512
     deploy:
       resources:
-        limits: { cpus: "${NETBOX_CPUS:-2.0}", memory: "${NETBOX_MEMORY:-2G}" }
+        limits: { cpus: "${NETBOX_CPUS:-2.0}", memory: "${NETBOX_MEMORY:-2G}", pids: 512 }
 
   # Background jobs: webhooks/event rules, scripts, reports, data sync, and NetBox's built-in
   # housekeeping system job (NetBox 4.2+ schedules it in the worker; the separate
@@ -121,10 +120,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-    pids_limit: 256
     deploy:
       resources:
-        limits: { cpus: "${NETBOX_WORKER_CPUS:-1.0}", memory: "${NETBOX_WORKER_MEMORY:-1G}" }
+        limits: { cpus: "${NETBOX_WORKER_CPUS:-1.0}", memory: "${NETBOX_WORKER_MEMORY:-1G}", pids: 256 }
 
   postgres:
     <<: *hardening
@@ -154,10 +152,9 @@ services:
       retries: 5
       start_period: 30s
     stop_grace_period: 60s
-    pids_limit: 200
     deploy:
       resources:
-        limits: { cpus: "${NETBOX_DB_CPUS:-1.0}", memory: "${NETBOX_DB_MEMORY:-1G}" }
+        limits: { cpus: "${NETBOX_DB_CPUS:-1.0}", memory: "${NETBOX_DB_MEMORY:-1G}", pids: 200 }
 
   # Task queue (persistent, AOF enabled)
   redis:
@@ -186,10 +183,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
-    pids_limit: 100
     deploy:
       resources:
-        limits: { cpus: "0.5", memory: 512M }
+        limits: { cpus: "0.5", memory: 512M, pids: 100 }
 
   # Cache (ephemeral, no persistence)
   redis-cache:
@@ -217,10 +213,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
-    pids_limit: 100
     deploy:
       resources:
-        limits: { cpus: "0.5", memory: 384M }
+        limits: { cpus: "0.5", memory: 384M, pids: 100 }
 
 secrets:
   db_password:

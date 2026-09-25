@@ -53,10 +53,9 @@ services:
       retries: 3
       start_period: 60s
     stop_grace_period: 30s
-    pids_limit: 500
     deploy:
       resources:
-        limits: { cpus: "${TELEPORT_CPUS:-2.0}", memory: "${TELEPORT_MEMORY:-2G}" }
+        limits: { cpus: "${TELEPORT_CPUS:-2.0}", memory: "${TELEPORT_MEMORY:-2G}", pids: 500 }
 
 volumes:
   teleport-data:   # cluster state (sqlite backend), CA keys, audit log, session recordings

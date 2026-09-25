@@ -54,7 +54,7 @@ rendered file, then `docker compose restart gitlab-runner`.
 - The custom CA feature of the image (`/etc/gitlab-runner/certs/ca.crt`) needs a writable root
   FS. If your GitLab uses a private CA, mount the CA bundle read-only over
   `/etc/ssl/certs/ca-certificates.crt` instead, or set `tls-ca-file` in the template.
-- `pids_limit` and resource limits apply to the runner manager only. Limit job containers in the
+- The PID and resource limits apply to the runner manager only. Limit job containers in the
   template (`[runners.docker]` `memory`, `cpus`, `pids_limit`) as needed.
 
 ## Backup
